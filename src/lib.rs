@@ -9,6 +9,7 @@ use pyo3::prelude::*;
 
 mod error;
 mod objects;
+mod odb;
 mod repository;
 
 /// Returns the pygrit version string. Smoke-test entry point for the spike.
@@ -22,6 +23,8 @@ fn _pygrit(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(_hello, m)?)?;
     error::register(m)?;
     m.add_class::<objects::ObjectId>()?;
+    m.add_class::<objects::Object>()?;
+    m.add_class::<odb::Odb>()?;
     m.add_class::<repository::Repository>()?;
     Ok(())
 }

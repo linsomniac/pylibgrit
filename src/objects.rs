@@ -2,6 +2,7 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 use pyo3::basic::CompareOp;
 use pyo3::prelude::*;
@@ -67,10 +68,10 @@ impl ObjectId {
     }
 }
 
-// AIDEV-NOTE: `#[allow(dead_code)]` is intentional — these conversion helpers are
-// consumed by later tasks (2.6/2.7: odb read, parsed object views, refs) that
-// produce ObjectId from a grit-lib oid and pass it back to grit-lib. Remove the
-// allow once those bindings land and call from_inner/inner.
+// AIDEV-NOTE: `inner()` is now used by the odb read/exists bindings (task 2.6).
+// `from_inner` is still consumed by later tasks (2.7: parsed object views, refs) that
+// produce an ObjectId from a grit-lib oid, hence the `#[allow(dead_code)]`. Remove the
+// allow once from_inner lands a caller.
 #[allow(dead_code)]
 impl ObjectId {
     pub fn from_inner(inner: grit_lib::objects::ObjectId) -> Self {
@@ -97,15 +98,47 @@ fn object_kind_discriminant(k: grit_lib::objects::ObjectKind) -> i32 {
     }
 }
 
-// AIDEV-NOTE: `#[allow(dead_code)]` is intentional — `kind_to_py` is consumed by the
-// odb read binding (task 2.6) which surfaces a grit-lib ObjectKind to Python. Remove
-// the allow once that caller lands.
 /// Convert a grit-lib object kind into the public `pygrit.ObjectKind` IntEnum member.
-#[allow(dead_code)]
 pub fn kind_to_py(py: Python<'_>, k: grit_lib::objects::ObjectKind) -> PyResult<Py<PyAny>> {
     let cls = OBJECT_KIND_CLS.get_or_try_init(py, || -> PyResult<Py<PyAny>> {
         Ok(py.import("pygrit")?.getattr("ObjectKind")?.unbind())
     })?;
     let member = cls.bind(py).call1((object_kind_discriminant(k),))?;
     Ok(member.unbind())
+}
+
+// AIDEV-NOTE: `Object` is the value `Odb::read` returns, surfaced to Python. It is
+// `frozen` (immutable). `kind` is stored as the already-constructed pygrit.ObjectKind
+// IntEnum member (built once at read time via kind_to_py) so the getter can hand back
+// the singleton (identity-comparable: `obj.kind is pygrit.ObjectKind.BLOB`). `data` is
+// an `Arc<[u8]>` so the payload can later be shared with typed views without copying.
+#[pyclass(frozen, module = "pygrit._pygrit")]
+pub struct Object {
+    id: ObjectId,
+    kind: Py<PyAny>,
+    data: Arc<[u8]>,
+}
+
+#[pymethods]
+impl Object {
+    #[getter]
+    fn id(&self) -> ObjectId {
+        self.id.clone()
+    }
+
+    #[getter]
+    fn kind(&self, py: Python<'_>) -> Py<PyAny> {
+        self.kind.clone_ref(py)
+    }
+
+    #[getter]
+    fn data<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.data)
+    }
+}
+
+impl Object {
+    pub fn new(id: ObjectId, kind: Py<PyAny>, data: Arc<[u8]>) -> Self {
+        Self { id, kind, data }
+    }
 }

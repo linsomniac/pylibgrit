@@ -8,11 +8,10 @@ use pyo3::types::PyBytes;
 
 use crate::error::map_err;
 
-// AIDEV-NOTE: We hold an `Arc<grit_lib::repo::Repository>` so a future `.odb` accessor
-// (task 2.6) can hand out an `Odb` that clones the Arc and outlives this Python
-// `Repository` handle (design §6: a child Odb keeps the repo alive). grit-lib exposes
-// git_dir/work_tree/odb as PUBLIC FIELDS (no getter methods); is_bare() is the only
-// method here.
+// AIDEV-NOTE: We hold an `Arc<grit_lib::repo::Repository>` so the `.odb` accessor can
+// hand out an `Odb` that clones the Arc and outlives this Python `Repository` handle
+// (design §6: a child Odb keeps the repo alive). grit-lib exposes git_dir/work_tree/odb
+// as PUBLIC FIELDS (no getter methods); is_bare() is the only method here.
 #[pyclass(module = "pygrit._pygrit")]
 pub struct Repository {
     pub(crate) inner: Arc<grit_lib::repo::Repository>,
@@ -25,11 +24,6 @@ impl Repository {
     // io::Error + String), so the closure's `Result<Repository, Error>` is Send and
     // this compiles. These are not hot paths, but releasing the GIL keeps other
     // Python threads live during the filesystem walk.
-    //
-    // AIDEV-NOTE: discover walks UPWARD from `path` (the canonicalized start dir), not
-    // from the process cwd, so `discover(empty_tmp_dir)` raises RepositoryError rather
-    // than picking up an ambient repo at the cwd. (grit-lib's discover does still
-    // consult GIT_DIR/GIT_WORK_TREE env if set; tests run without those.)
     #[staticmethod]
     fn discover(py: Python<'_>, path: PathBuf) -> PyResult<Self> {
         let repo = py
@@ -71,5 +65,12 @@ impl Repository {
     #[getter]
     fn is_bare(&self) -> bool {
         self.inner.is_bare()
+    }
+
+    #[getter]
+    fn odb(&self) -> crate::odb::Odb {
+        crate::odb::Odb {
+            repo: Arc::clone(&self.inner),
+        }
     }
 }
