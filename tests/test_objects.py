@@ -270,6 +270,84 @@ def test_blob_on_non_blob_raises(simple_repo: Path) -> None:
         repo.blob(pygrit.ObjectId.from_hex(tree_oid))
 
 
+def test_typed_accessors_verify_object_kind(simple_repo: Path) -> None:
+    """commit()/tree()/tag() must reject an oid whose object kind does not match.
+
+    AIDEV-NOTE: A blob whose bytes happen to parse as a valid commit/tree/tag payload
+    must not be silently accepted by the typed accessor — the accessor verifies the
+    ODB object's kind BEFORE parsing (mirroring blob()'s existing kind check).
+    """
+    import pygrit
+
+    repo = pygrit.Repository.discover(str(simple_repo))
+    blob_oid = pygrit.ObjectId.from_hex(rev_parse(simple_repo, "HEAD:a.txt"))
+    tree_oid = pygrit.ObjectId.from_hex(rev_parse(simple_repo, "HEAD^{tree}"))
+    commit_oid = pygrit.ObjectId.from_hex(rev_parse(simple_repo, "HEAD"))
+
+    # Mismatched kinds raise InvalidObjectError (kind verified before parsing).
+    with pytest.raises(pygrit.InvalidObjectError):
+        repo.commit(tree_oid)
+    with pytest.raises(pygrit.InvalidObjectError):
+        repo.tree(commit_oid)
+    with pytest.raises(pygrit.InvalidObjectError):
+        repo.tag(commit_oid)
+    with pytest.raises(pygrit.InvalidObjectError):
+        repo.commit(blob_oid)
+
+    # Positive cases still work.
+    assert repo.commit(commit_oid).id == commit_oid
+    assert len(repo.tree(tree_oid)) >= 1
+
+
+def test_typed_accessors_reject_blob_with_parseable_payload(
+    tmp_path: Path, git_env: dict[str, str]
+) -> None:
+    """A blob whose bytes ARE a valid commit payload must not pass commit().
+
+    AIDEV-NOTE: This is the core bug FIX 1 addresses. Without a kind check before
+    parsing, a blob storing a valid commit-object payload would be wrongly accepted
+    by commit(). We store such a payload as a BLOB and assert commit() rejects it on
+    kind, raising InvalidObjectError.
+    """
+    import pygrit
+
+    repo_dir = tmp_path / "kindrepo"
+    repo_dir.mkdir()
+    env = dict(git_env)
+
+    def g(*args: str, stdin: bytes | None = None) -> bytes:
+        return subprocess.run(
+            ["git", *args],
+            cwd=repo_dir,
+            env=env,
+            check=True,
+            input=stdin,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        ).stdout
+
+    g("init", "-q", "-b", "main")
+    tree = g("mktree", stdin=b"").strip().decode()
+    # A perfectly valid commit payload...
+    commit_payload = (
+        f"tree {tree}\n".encode()
+        + b"author Test Author <author@example.com> 1112911993 +0000\n"
+        + b"committer Test Committer <committer@example.com> 1112911993 +0000\n"
+        + b"\nhi\n"
+    )
+    # ...stored as a BLOB object (kind=blob, content=commit payload).
+    blob_oid = (
+        g("hash-object", "-w", "-t", "blob", "--stdin", stdin=commit_payload)
+        .strip()
+        .decode()
+    )
+
+    pyrepo = pygrit.Repository.discover(str(repo_dir))
+    # commit() must reject the blob on KIND, even though its bytes parse as a commit.
+    with pytest.raises(pygrit.InvalidObjectError):
+        pyrepo.commit(pygrit.ObjectId.from_hex(blob_oid))
+
+
 def test_tag_fields_match_git(tmp_path: Path, git_env: dict[str, str]) -> None:
     import pygrit
 

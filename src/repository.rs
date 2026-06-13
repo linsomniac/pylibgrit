@@ -120,38 +120,53 @@ impl Repository {
         Ok(crate::config::ConfigSet::new(cfg))
     }
 
-    // AIDEV-NOTE: Read any object then `parse_commit` over its bytes. A non-commit oid
-    // parses-fail → InvalidObjectError (acceptable: the caller asked for a commit). The
-    // odb read releases the GIL; parse_commit runs under the GIL (it touches Python only
-    // when building Signatures). `oid.inner()` is an owned Copy, so it moves into the
-    // closure with no lifetime tie to `oid`.
+    // AIDEV-NOTE: Read any object, VERIFY its kind is Commit, then `parse_commit` over its
+    // bytes. We check the ODB object's kind BEFORE parsing (mirroring blob()): a blob whose
+    // content happens to be a valid commit payload must NOT be accepted as a commit (type
+    // invariant). A kind mismatch → InvalidObjectError; a corrupt commit → parse-fail →
+    // InvalidObjectError. The odb read releases the GIL; parse_commit runs under the GIL (it
+    // touches Python only when building Signatures). `oid.inner()` is an owned Copy, so it
+    // moves into the closure with no lifetime tie to `oid`.
     fn commit(
         &self,
         py: Python<'_>,
         oid: &crate::objects::ObjectId,
     ) -> PyResult<crate::objects::Commit> {
         let want = oid.inner();
-        let data = py
+        let grit_lib::objects::Object { kind, data } = py
             .allow_threads(|| self.inner.odb.read(&want))
-            .map_err(map_err)?
-            .data;
+            .map_err(map_err)?;
+        if kind != grit_lib::objects::ObjectKind::Commit {
+            return Err(crate::error::InvalidObjectError::new_err(format!(
+                "object {} is a {}, not a commit",
+                want.to_hex(),
+                kind
+            )));
+        }
         crate::objects::Commit::from_bytes(py, oid.clone(), &data)
     }
 
-    // AIDEV-NOTE: Read any object then `parse_tree` over its bytes. A non-tree oid
-    // parses-fail → InvalidObjectError (acceptable: the caller asked for a tree). Same
-    // GIL/lifetime pattern as `commit`. The returned `Tree` OWNS its entries (Arc), so it
-    // outlives this Repository handle.
+    // AIDEV-NOTE: Read any object, VERIFY its kind is Tree, then `parse_tree` over its bytes.
+    // We check the ODB object's kind BEFORE parsing (mirroring blob()): a blob whose content
+    // happens to be a valid tree payload must NOT be accepted as a tree. A kind mismatch →
+    // InvalidObjectError. Same GIL/lifetime pattern as `commit`. The returned `Tree` OWNS its
+    // entries (Arc), so it outlives this Repository handle.
     fn tree(
         &self,
         py: Python<'_>,
         oid: &crate::objects::ObjectId,
     ) -> PyResult<crate::objects::Tree> {
         let want = oid.inner();
-        let data = py
+        let grit_lib::objects::Object { kind, data } = py
             .allow_threads(|| self.inner.odb.read(&want))
-            .map_err(map_err)?
-            .data;
+            .map_err(map_err)?;
+        if kind != grit_lib::objects::ObjectKind::Tree {
+            return Err(crate::error::InvalidObjectError::new_err(format!(
+                "object {} is a {}, not a tree",
+                want.to_hex(),
+                kind
+            )));
+        }
         crate::objects::Tree::from_bytes(&data)
     }
 
@@ -181,14 +196,23 @@ impl Repository {
         )))
     }
 
-    // AIDEV-NOTE: Read any object then `parse_tag` over its bytes. A non-tag (or non-UTF-8)
-    // object parses-fail → InvalidObjectError. Same GIL/lifetime pattern as `commit`.
+    // AIDEV-NOTE: Read any object, VERIFY its kind is Tag, then `parse_tag` over its bytes.
+    // We check the ODB object's kind BEFORE parsing (mirroring blob()): a blob whose content
+    // happens to be a valid tag payload must NOT be accepted as a tag. A kind mismatch →
+    // InvalidObjectError; a non-UTF-8/corrupt tag → parse-fail → InvalidObjectError. Same
+    // GIL/lifetime pattern as `commit`.
     fn tag(&self, py: Python<'_>, oid: &crate::objects::ObjectId) -> PyResult<crate::objects::Tag> {
         let want = oid.inner();
-        let data = py
+        let grit_lib::objects::Object { kind, data } = py
             .allow_threads(|| self.inner.odb.read(&want))
-            .map_err(map_err)?
-            .data;
+            .map_err(map_err)?;
+        if kind != grit_lib::objects::ObjectKind::Tag {
+            return Err(crate::error::InvalidObjectError::new_err(format!(
+                "object {} is a {}, not a tag",
+                want.to_hex(),
+                kind
+            )));
+        }
         crate::objects::Tag::from_bytes(py, &data)
     }
 
