@@ -167,4 +167,28 @@ impl Repository {
             entries,
         ))
     }
+
+    // AIDEV-NOTE: HEAD is excluded from `list_refs`, so it gets its own accessor.
+    // `read_head` returns `Some(refname)` when HEAD is symbolic (the normal case) and `None`
+    // when detached. For a detached HEAD we resolve it to a direct oid via `resolve_ref`. The
+    // returned `Reference` carries the repo Arc so its `peel()` can follow a symbolic HEAD.
+    fn head(&self, py: Python<'_>) -> PyResult<crate::refs::Reference> {
+        let git_dir = self.inner.git_dir.clone();
+        let sym = py
+            .allow_threads(|| grit_lib::refs::read_head(&git_dir))
+            .map_err(map_err)?;
+        let data = match sym {
+            Some(refname) => {
+                crate::refs::ReferenceData::symbolic(b"HEAD".to_vec(), refname.into_bytes())
+            }
+            None => {
+                // Detached HEAD: resolve to a direct oid.
+                let oid = py
+                    .allow_threads(|| grit_lib::refs::resolve_ref(&git_dir, "HEAD"))
+                    .map_err(map_err)?;
+                crate::refs::ReferenceData::direct(b"HEAD".to_vec(), oid)
+            }
+        };
+        Ok(crate::refs::Reference::new(Arc::clone(&self.inner), data))
+    }
 }

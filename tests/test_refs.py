@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
-from tests.gitlib import run_git
+from tests.gitlib import git_text, rev_parse, run_git
 
 
 def test_references_match_git(simple_repo: Path) -> None:
@@ -23,3 +24,30 @@ def test_references_match_git(simple_repo: Path) -> None:
     repo = pygrit.Repository.discover(str(simple_repo))
     got = {r.name: r.target.hex for r in repo.references() if r.target is not None}
     assert got == expected
+
+
+def test_head_symbolic(simple_repo: Path) -> None:
+    import pygrit
+
+    branch = git_text(simple_repo, "symbolic-ref", "HEAD")  # e.g. refs/heads/main
+    repo = pygrit.Repository.discover(str(simple_repo))
+    head = repo.head()
+    assert head.is_symbolic is True
+    assert head.symbolic_target == branch.encode()
+    assert head.target is None
+    assert head.peel().hex == git_text(simple_repo, "rev-parse", "HEAD")
+
+
+def test_head_detached(simple_repo: Path) -> None:
+    import pygrit
+
+    head_oid = rev_parse(simple_repo, "HEAD")
+    # detach
+    subprocess.run(
+        ["git", "-C", str(simple_repo), "checkout", "-q", "--detach", head_oid],
+        check=True,
+    )
+    repo = pygrit.Repository.discover(str(simple_repo))
+    head = repo.head()
+    assert head.is_symbolic is False
+    assert head.peel().hex == head_oid
