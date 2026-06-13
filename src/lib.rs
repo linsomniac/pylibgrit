@@ -13,6 +13,8 @@ use pyo3::prelude::*;
 use grit_lib::repo::Repository;
 use grit_lib::rev_parse::resolve_revision;
 
+mod error;
+
 /// Returns the pygrit version string. Smoke-test entry point for the spike.
 #[pyfunction]
 fn _hello() -> &'static str {
@@ -39,5 +41,6 @@ fn _discover_head_hex(path: &str) -> PyResult<String> {
 fn _pygrit(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(_hello, m)?)?;
     m.add_function(wrap_pyfunction!(_discover_head_hex, m)?)?;
+    error::register(m)?;
     Ok(())
 }
