@@ -76,6 +76,11 @@ impl DiffEntry {
 // per-file insertion/deletion counts (`FileStatInput`); it does not derive counts from a tree
 // diff. So the binding layer does the numstat-style line counting itself (via
 // grit_lib::diff::count_changes + merge_file::is_binary). `frozen` (immutable).
+//
+// AIDEV-NOTE: --numstat PARITY LIMITATION. These counts match `git --numstat` for normal
+// `\n`-terminated text, but diverge for files containing a bare `\r` (CR not in a CRLF) as
+// content: `count_changes` (via `similar`) treats `\r` as a line break while git splits on
+// `\n` only. See compute_diff_stats in src/repository.rs and the xfail in tests/test_diff.py.
 #[derive(Clone)]
 struct DiffStatsData {
     files_changed: usize,

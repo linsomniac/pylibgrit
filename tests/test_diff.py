@@ -101,3 +101,55 @@ def test_diff_iter_outlives_repo(diff_repo: Path) -> None:
     del repo
     statuses = sorted(e.status for e in it)
     assert statuses == ["A", "D", "M"]
+
+
+@pytest.mark.xfail(
+    reason="count_changes splits bare \\r as a line break; git --numstat splits on \\n only",
+    strict=False,
+)
+def test_diffstat_bare_cr_diverges_from_git(
+    tmp_path: Path, git_env: dict[str, str]
+) -> None:
+    """Document the known --numstat parity gap for bare-CR-as-content files.
+
+    grit's count_changes (via `similar`) treats a bare `\\r` as a line break, but
+    `git --numstat` splits on `\\n` only. For `a\\rb\\n` -> `a\\rb\\rc\\rd\\n` the
+    binding counts ins=3/del=1 while git counts ins=1/del=1, so the oracle assertion
+    fails (xfail). This test exists to keep the divergence executable and visible.
+    """
+    import pygrit
+
+    from tests.gitlib import run_git
+
+    repo = tmp_path / "barecr"
+    repo.mkdir()
+
+    def g(*a: str) -> None:
+        subprocess.run(["git", *a], cwd=repo, env=git_env, check=True)
+
+    g("init", "-q", "-b", "main")
+    # Disable autocrlf so the bare CR bytes survive verbatim into the blob.
+    g("config", "core.autocrlf", "false")
+    (repo / "f").write_bytes(b"a\rb\n")
+    g("add", "-A")
+    g("commit", "-q", "-m", "base")
+    (repo / "f").write_bytes(b"a\rb\rc\rd\n")
+    g("add", "-A")
+    g("commit", "-q", "-m", "change")
+
+    a = run_git(repo, "rev-parse", "HEAD^").decode().strip()
+    b = run_git(repo, "rev-parse", "HEAD").decode().strip()
+    numstat = run_git(repo, "diff", "--numstat", a, b).decode().strip().splitlines()
+    ins = dele = 0
+    for line in numstat:
+        added, deleted, _path = line.split("\t", 2)
+        if added != "-":
+            ins += int(added)
+        if deleted != "-":
+            dele += int(deleted)
+
+    pyrepo = pygrit.Repository.discover(str(repo))
+    stats = pyrepo.diff(pyrepo.resolve("HEAD^"), pyrepo.resolve("HEAD")).stats
+    # git: ins=1/del=1; binding (count_changes): ins=3/del=1 -> these differ (xfail).
+    assert stats.insertions == ins
+    assert stats.deletions == dele

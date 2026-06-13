@@ -332,10 +332,19 @@ impl Repository {
     //     the new blob (empty if absent → Deleted). If EITHER side is binary (contains a NUL,
     //     per grit_lib::merge_file::is_binary, == Git's heuristic for `--numstat`'s `-`), the
     //     file contributes 0 insertions/0 deletions (git prints `-`/`-`, not counted).
-    //   - Otherwise count via grit_lib::diff::count_changes (similar's Myers, == Git's default
-    //     diff algorithm for `--numstat`), decoding bytes losslessly (latin-1-style 1:1) so the
-    //     line counts are unaffected by encoding.
+    //   - Otherwise count via grit_lib::diff::count_changes (similar's Myers), decoding bytes
+    //     losslessly (latin-1-style 1:1) so the line counts are unaffected by encoding.
     // A blob read failure is treated as an empty side (best-effort; a missing/absent oid).
+    //
+    // AIDEV-NOTE: --numstat PARITY LIMITATION (bare CR). For normal `\n`-terminated text the
+    // counts match `git --numstat` exactly (verified in tests/test_diff.py). They can DIVERGE,
+    // however, for files that contain a bare `\r` (CR not part of a CRLF) as CONTENT: grit's
+    // `count_changes` delegates to `similar`'s line tokenizer, which treats `\r`, `\r\n`, AND
+    // `\n` as line breaks, whereas `git --numstat` splits on `\n` ONLY (a bare `\r` is line
+    // content there, not a terminator). So e.g. `a\rb\n` -> `a\rb\rc\rd\n` counts as ins=3/del=1
+    // here but ins=1/del=1 in git. We accept this (the `count_changes` path is otherwise
+    // verified-correct); exact parity would require splitting on `\n` only and diffing those
+    // segments ourselves. See the xfail in tests/test_diff.py that encodes the divergence.
     fn compute_diff_stats(
         odb: &grit_lib::odb::Odb,
         entries: &[grit_lib::diff::DiffEntry],
@@ -381,9 +390,13 @@ fn read_blob_bytes(odb: &grit_lib::odb::Odb, oid: &grit_lib::objects::ObjectId) 
 }
 
 // AIDEV-NOTE: Map raw bytes to a String 1:1 (each byte -> its U+00xx code point, latin-1
-// style). This is lossless and order/line-count preserving, so `count_changes` (which diffs
-// `&str` lines split on '\n' == 0x0A) yields the same insertion/deletion counts as operating
-// on the raw bytes. We do this only AFTER the binary check, so text files are well-behaved.
+// style). This is lossless and order-preserving, so `count_changes` over the resulting `&str`
+// yields the same insertion/deletion counts as operating on the raw bytes. We do this only
+// AFTER the binary check, so text files are well-behaved. NOTE on line breaks: `count_changes`
+// (via `similar`) tokenizes lines on `\r`, `\r\n`, AND `\n`, NOT on `\n` only like `git
+// --numstat`. The 1:1 byte mapping preserves every byte (including any `\r`), so it does not
+// itself cause divergence — but the differing line-break set means bare-`\r`-as-content files
+// can still count differently from git (see the parity-limitation note on compute_diff_stats).
 fn bytes_to_lossy_string(data: &[u8]) -> String {
     data.iter().map(|&b| b as char).collect()
 }
