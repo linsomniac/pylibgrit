@@ -32,11 +32,7 @@ __all__ = [
     "Tag",
     "Tree",
     "TreeEntry",
-    "_hello",
 ]
-
-def _hello() -> str:
-    """Return the pygrit version string. Smoke-test entry point."""
 
 # --- Exceptions -----------------------------------------------------------
 

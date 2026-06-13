@@ -22,7 +22,6 @@ from pygrit._pygrit import (
     Tag,
     Tree,
     TreeEntry,
-    _hello,
 )
 
 
@@ -62,5 +61,4 @@ __all__ = [
     "Tag",
     "Tree",
     "TreeEntry",
-    "_hello",
 ]
