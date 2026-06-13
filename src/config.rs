@@ -9,11 +9,10 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-// AIDEV-NOTE: NOT `frozen`: `grit_lib::config::ConfigSet` is not `Copy`/`Clone`-free
-// to store here, and frozen only buys immutability of the Python handle — all our
-// methods take `&self` and never mutate, so non-frozen is fine. We hold the inner
-// ConfigSet BY VALUE (it owns its `Vec<ConfigEntry>`), so this handle is fully
-// self-contained and outlives the `Repository` it was loaded from.
+// AIDEV-NOTE: NOT `frozen`, and that's fine: every method takes `&self` and never
+// mutates, so the immutability `frozen` would enforce buys us nothing here. We hold
+// the inner ConfigSet BY VALUE (it owns its `Vec<ConfigEntry>`), so this handle is
+// fully self-contained and outlives the `Repository` it was loaded from.
 #[pyclass(module = "pygrit._pygrit")]
 pub struct ConfigSet {
     inner: grit_lib::config::ConfigSet,
