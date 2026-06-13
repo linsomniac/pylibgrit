@@ -227,6 +227,75 @@ def test_commit_non_utf8_author_name(tmp_path: Path, git_env: dict[str, str]) ->
     assert commit.author.name.decode("latin-1") == "José"
 
 
+def test_commit_message_error_handlers(
+    tmp_path: Path, git_env: dict[str, str]
+) -> None:
+    """message(errors=...) must support non-strict handlers (surrogateescape/replace).
+
+    AIDEV-NOTE: A non-UTF-8 message decoded with errors="surrogateescape" yields a str
+    containing lone surrogates, which a Rust `String` cannot hold. The decode path must
+    therefore return the Python str object directly rather than round-tripping through a
+    Rust String. We build a commit with a raw 0xE9 byte in the message body by writing the
+    commit object directly (git re-encodes -m messages from the locale, so we cannot smuggle
+    a raw byte via `git commit`).
+    """
+    import pygrit
+
+    repo = tmp_path / "msgrepo"
+    repo.mkdir()
+    env = dict(git_env)
+
+    def g(*args: str, stdin: bytes | None = None) -> bytes:
+        return subprocess.run(
+            ["git", *args],
+            cwd=repo,
+            env=env,
+            check=True,
+            input=stdin,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        ).stdout
+
+    g("init", "-q", "-b", "main")
+    g("config", "core.autocrlf", "false")
+    tree = g("mktree", stdin=b"").strip().decode()
+    # 0xE9 is 'e-acute' in Latin-1, invalid as standalone UTF-8, placed in the body.
+    body = b"caf\xe9 message\n"
+    payload = (
+        f"tree {tree}\n".encode()
+        + b"author Test Author <author@example.com> 1112911993 +0000\n"
+        + b"committer Test Committer <committer@example.com> 1112911993 +0000\n"
+        + b"\n"
+        + body
+    )
+    oid = (
+        g("hash-object", "-w", "-t", "commit", "--stdin", stdin=payload)
+        .strip()
+        .decode()
+    )
+
+    pyrepo = pygrit.Repository.discover(str(repo))
+    commit = pyrepo.commit(pygrit.ObjectId.from_hex(oid))
+
+    # The raw 0xe9 byte survives in message_bytes.
+    assert b"\xe9" in commit.message_bytes
+    assert commit.message_bytes == body
+
+    # Default strict decode raises on the invalid UTF-8 byte.
+    with pytest.raises(UnicodeDecodeError):
+        _ = commit.message()
+
+    # surrogateescape returns a str round-tripping back to the original bytes.
+    escaped = commit.message(errors="surrogateescape")
+    assert isinstance(escaped, str)
+    assert escaped.encode("utf-8", "surrogateescape") == body
+
+    # replace yields a str containing the U+FFFD replacement char.
+    replaced = commit.message(errors="replace")
+    assert isinstance(replaced, str)
+    assert "�" in replaced
+
+
 def test_tree_entries_match_git(simple_repo: Path) -> None:
     import pygrit
 

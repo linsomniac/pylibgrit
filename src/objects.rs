@@ -84,12 +84,20 @@ impl ObjectId {
 // AIDEV-NOTE: Decode bytes using Python's own codec machinery (full encoding + errors
 // support: utf-8/latin-1/.../strict/replace/surrogateescape) rather than reimplementing
 // codecs in Rust. Shared by Signature.name_str/email_str and Commit.message().
-fn decode_bytes(data: &[u8], encoding: &str, errors: &str) -> PyResult<String> {
-    Python::with_gil(|py| {
-        PyBytes::new(py, data)
-            .call_method1("decode", (encoding, errors))?
-            .extract::<String>()
-    })
+//
+// We RETURN THE PYTHON str OBJECT directly (a `Bound<PyAny>`) rather than round-tripping
+// through a Rust `String`. This is essential for non-strict error handlers: with
+// errors="surrogateescape" (or "replace" on data yielding lone surrogates), Python returns
+// a str containing UNPAIRED SURROGATES, which a Rust `String` CANNOT hold — so an
+// `.extract::<String>()` here would raise, defeating the `errors=` parameter. By handing the
+// Python str straight back, surrogate-escaped/replacement strings flow through intact.
+fn decode_bytes<'py>(
+    py: Python<'py>,
+    data: &[u8],
+    encoding: &str,
+    errors: &str,
+) -> PyResult<Bound<'py, PyAny>> {
+    PyBytes::new(py, data).call_method1("decode", (encoding, errors))
 }
 
 // AIDEV-NOTE: grit-lib has NO Signature struct — author/committer are raw Git-wire idents
@@ -125,15 +133,17 @@ impl Signature {
     }
 
     /// The name decoded as UTF-8 (strict). Raises `UnicodeDecodeError` on non-UTF-8.
+    // AIDEV-NOTE: `py` is PyO3-injected (NOT part of the Python-visible signature), so the
+    // stub stays `-> str`. We return the decoded Python str object (see decode_bytes).
     #[getter]
-    fn name_str(&self) -> PyResult<String> {
-        decode_bytes(&self.name, "utf-8", "strict")
+    fn name_str<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        decode_bytes(py, &self.name, "utf-8", "strict")
     }
 
     /// The email decoded as UTF-8 (strict). Raises `UnicodeDecodeError` on non-UTF-8.
     #[getter]
-    fn email_str(&self) -> PyResult<String> {
-        decode_bytes(&self.email, "utf-8", "strict")
+    fn email_str<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        decode_bytes(py, &self.email, "utf-8", "strict")
     }
 }
 
@@ -237,9 +247,17 @@ impl Commit {
     }
 
     /// The commit message decoded to `str` (default UTF-8/strict; caller-overridable).
+    // AIDEV-NOTE: `py` is PyO3-injected (NOT part of the Python-visible signature), so the
+    // stub stays `-> str`. We return the decoded Python str object so non-strict error
+    // handlers (surrogateescape/replace) that yield lone surrogates work (see decode_bytes).
     #[pyo3(signature = (encoding="utf-8", errors="strict"))]
-    fn message(&self, encoding: &str, errors: &str) -> PyResult<String> {
-        decode_bytes(&self.message, encoding, errors)
+    fn message<'py>(
+        &self,
+        py: Python<'py>,
+        encoding: &str,
+        errors: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        decode_bytes(py, &self.message, encoding, errors)
     }
 }
 
