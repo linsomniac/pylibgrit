@@ -145,4 +145,26 @@ impl Repository {
             .data;
         crate::objects::Tag::from_bytes(py, &data)
     }
+
+    // AIDEV-NOTE: We pass prefix="refs/" (NOT ""): in grit-lib 0.4.1, `list_refs(git_dir, "")`
+    // walks `git_dir` itself and so INCLUDES top-level pseudorefs like HEAD (the spec's claim
+    // that "" excludes HEAD is wrong for this version — verified against the source:
+    // normalize_list_refs_prefix("") -> "" -> base == git_dir). Using "refs/" restricts the
+    // walk to `refs/`, excluding HEAD/ORIG_HEAD/etc. and matching `git for-each-ref` exactly.
+    // Use `head()` for HEAD. The returned ReferenceIter OWNS its data (Arc<[ReferenceData]> +
+    // Arc<Repository>), so it outlives this Repository handle.
+    fn references(&self, py: Python<'_>) -> PyResult<crate::refs::ReferenceIter> {
+        let git_dir = self.inner.git_dir.clone();
+        let refs = py
+            .allow_threads(|| grit_lib::refs::list_refs(&git_dir, "refs/"))
+            .map_err(map_err)?;
+        let entries: Vec<crate::refs::ReferenceData> = refs
+            .into_iter()
+            .map(|(name, oid)| crate::refs::ReferenceData::direct(name.into_bytes(), oid))
+            .collect();
+        Ok(crate::refs::ReferenceIter::new(
+            Arc::clone(&self.inner),
+            entries,
+        ))
+    }
 }

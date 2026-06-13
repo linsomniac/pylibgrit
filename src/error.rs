@@ -84,6 +84,13 @@ pub fn map_err(e: grit_lib::error::Error) -> PyErr {
     }
 }
 
+// AIDEV-NOTE: Small helper for binding-layer ref errors that do not originate from a
+// `grit_lib::error::Error` (e.g. a non-UTF-8 ref name we refuse to pass to grit-lib's
+// `&str`-typed APIs). Maps to `RepositoryError`, the subclass for ref/repository faults.
+pub fn invalid_ref(msg: &str) -> PyErr {
+    RepositoryError::new_err(msg.to_owned())
+}
+
 /// Registers the exception types on the native module.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("GritError", m.py().get_type::<GritError>())?;
