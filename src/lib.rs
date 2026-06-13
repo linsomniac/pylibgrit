@@ -44,5 +44,6 @@ fn _pygrit(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(_discover_head_hex, m)?)?;
     error::register(m)?;
     m.add_class::<objects::ObjectId>()?;
+    m.add_class::<objects::ObjectKind>()?;
     Ok(())
 }

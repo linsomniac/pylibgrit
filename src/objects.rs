@@ -80,3 +80,48 @@ impl ObjectId {
         self.inner
     }
 }
+
+// AIDEV-NOTE: Mirror of grit-lib's `ObjectKind { Blob, Tree, Commit, Tag }` as a
+// Python enum. `eq` + `eq_int` make members comparable and give each a stable int
+// discriminant; the Python-facing names are uppercased (COMMIT/TREE/BLOB/TAG).
+// `#[allow(clippy::upper_case_acronyms)]` is required because those member names are
+// the deliberate Python-facing identifiers (and BLOB/TAG read as acronyms to clippy);
+// renaming them would change the public enum API. Variant declaration order also
+// fixes the eq_int discriminants (COMMIT=0..TAG=3) that python/pygrit/__init__.py's
+// IntEnum facade mirrors — keep the two in sync.
+#[pyclass(eq, eq_int, module = "pygrit._pygrit")]
+#[derive(Clone, PartialEq)]
+#[allow(clippy::upper_case_acronyms)]
+pub enum ObjectKind {
+    COMMIT,
+    TREE,
+    BLOB,
+    TAG,
+}
+
+#[pymethods]
+impl ObjectKind {
+    fn __repr__(&self) -> &'static str {
+        match self {
+            ObjectKind::COMMIT => "ObjectKind.COMMIT",
+            ObjectKind::TREE => "ObjectKind.TREE",
+            ObjectKind::BLOB => "ObjectKind.BLOB",
+            ObjectKind::TAG => "ObjectKind.TAG",
+        }
+    }
+}
+
+// AIDEV-NOTE: `#[allow(dead_code)]` is intentional — `from_grit` is consumed by the
+// odb read / parsed-object-view bindings (task 2.6+) that surface a grit-lib
+// ObjectKind to Python. Remove the allow once those callers land.
+#[allow(dead_code)]
+impl ObjectKind {
+    pub fn from_grit(k: grit_lib::objects::ObjectKind) -> Self {
+        match k {
+            grit_lib::objects::ObjectKind::Commit => ObjectKind::COMMIT,
+            grit_lib::objects::ObjectKind::Tree => ObjectKind::TREE,
+            grit_lib::objects::ObjectKind::Blob => ObjectKind::BLOB,
+            grit_lib::objects::ObjectKind::Tag => ObjectKind::TAG,
+        }
+    }
+}
