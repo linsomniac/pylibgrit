@@ -212,23 +212,51 @@ impl Repository {
     // `repo.resolve("HEAD")`); we convert it to a 40/64-char hex spec for rev_list, which
     // treats positive specs as commit tips and returns all reachable ancestors in order.
     //
-    // AIDEV-NOTE: ORDERING is added in Task 4.2; for now the walk uses rev_list's default
-    // order (committer-date reverse-chronological), which matches `git rev-list HEAD`.
-    #[pyo3(signature = (start, *, order=None))]
+    // AIDEV-NOTE: ORDERING. grit-lib's `RevListOptions` natively supports
+    // `ordering: OrderingMode { Default, DateOrderWalk, AuthorDateWalk, Topo, AuthorDateTopo }`
+    // and `reverse: bool` (confirmed against grit-lib-0.4.1/src/rev_list.rs), so EVERY order
+    // we expose is backed by grit-lib — nothing is binding-faked or xfail'd. We map `order=`:
+    //   - None / "date"  -> OrderingMode::Default       (== `git rev-list HEAD`, committer-date)
+    //   - "date-order"   -> OrderingMode::DateOrderWalk  (== `git rev-list --date-order`)
+    //   - "topo"         -> OrderingMode::Topo           (== `git rev-list --topo-order`)
+    //   - "reverse"      -> Default order + reverse=true (== `git rev-list --reverse`)
+    // and `first_parent=True` sets `RevListOptions::first_parent` (== `--first-parent`).
+    // An unknown `order` value raises ValueError. `output_mode = OidOnly` because we only
+    // need the oids — RevWalk reads+parses the commits itself.
+    //
+    // AIDEV-NOTE: We deliberately surface a SUBSET of grit-lib's ordering levers
+    // (author-date variants `AuthorDateWalk`/`AuthorDateTopo` exist but are not exposed yet)
+    // — these are the orderings that have a direct `git rev-list` flag oracle in our tests.
+    #[pyo3(signature = (start, *, order=None, first_parent=false))]
     fn revwalk(
         &self,
         py: Python<'_>,
         start: &crate::objects::ObjectId,
         order: Option<&str>,
+        first_parent: bool,
     ) -> PyResult<crate::revwalk::RevWalk> {
-        use grit_lib::rev_list::{OutputMode, RevListOptions};
+        use grit_lib::rev_list::{OrderingMode, OutputMode, RevListOptions};
 
-        let options = RevListOptions {
+        let mut options = RevListOptions {
             output_mode: OutputMode::OidOnly,
+            first_parent,
             ..Default::default()
         };
-        // Ordering handling added in Task 4.2.
-        let _ = order;
+        match order {
+            None | Some("date") => options.ordering = OrderingMode::Default,
+            Some("date-order") => options.ordering = OrderingMode::DateOrderWalk,
+            Some("topo") => options.ordering = OrderingMode::Topo,
+            Some("reverse") => {
+                options.ordering = OrderingMode::Default;
+                options.reverse = true;
+            }
+            Some(other) => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "unknown order: {other:?} (expected one of: \
+                     'date', 'date-order', 'topo', 'reverse')"
+                )));
+            }
+        }
 
         let spec = start.inner().to_hex();
         let positive = vec![spec];
