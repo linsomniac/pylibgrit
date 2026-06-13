@@ -271,4 +271,54 @@ impl Repository {
             result.commits,
         ))
     }
+
+    // AIDEV-NOTE: `diff(a, b)` accepts COMMIT or TREE oids on either side: we peel each to a
+    // tree oid (`tree_oid_of`) before calling grit's `diff_trees`. grit-lib's `diff_trees`
+    // does NOT do rename detection by default — that lives in a SEPARATE function
+    // (`grit_lib::diff::detect_renames`), so an unrelated delete+add stays as separate `D`/`A`
+    // entries, matching `git diff --raw` WITHOUT `-M`. The read releases the GIL for the tree
+    // walk + blob reads. The returned `Diff` OWNS its entries (Arc), so it outlives this handle.
+    fn diff(
+        &self,
+        py: Python<'_>,
+        a: &crate::objects::ObjectId,
+        b: &crate::objects::ObjectId,
+    ) -> PyResult<crate::diff::Diff> {
+        let ta = self.tree_oid_of(py, a.inner())?;
+        let tb = self.tree_oid_of(py, b.inner())?;
+        let repo = Arc::clone(&self.inner);
+        let entries = py
+            .allow_threads(|| grit_lib::diff::diff_trees(&repo.odb, Some(&ta), Some(&tb), ""))
+            .map_err(map_err)?;
+        Ok(crate::diff::Diff::from_entries(entries))
+    }
+}
+
+impl Repository {
+    // AIDEV-NOTE: Peel an object id to its TREE oid so `diff` works for both commit and tree
+    // inputs. Read the object; if it is a Commit, parse it and take its `.tree`; if it is
+    // already a Tree, use the oid as-is; anything else (blob/tag) is an InvalidObjectError.
+    // The odb read releases the GIL; parse_commit runs under the GIL (it touches Python only
+    // when building Signatures, which we don't here — we just read CommitData.tree).
+    fn tree_oid_of(
+        &self,
+        py: Python<'_>,
+        oid: grit_lib::objects::ObjectId,
+    ) -> PyResult<grit_lib::objects::ObjectId> {
+        let obj = py
+            .allow_threads(|| self.inner.odb.read(&oid))
+            .map_err(map_err)?;
+        match obj.kind {
+            grit_lib::objects::ObjectKind::Tree => Ok(oid),
+            grit_lib::objects::ObjectKind::Commit => {
+                let c = grit_lib::objects::parse_commit(&obj.data).map_err(map_err)?;
+                Ok(c.tree)
+            }
+            other => Err(crate::error::InvalidObjectError::new_err(format!(
+                "object {} is a {}, cannot diff (expected a commit or tree)",
+                oid.to_hex(),
+                other
+            ))),
+        }
+    }
 }

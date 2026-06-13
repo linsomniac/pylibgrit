@@ -7,6 +7,7 @@
 
 use pyo3::prelude::*;
 
+mod diff;
 mod error;
 mod objects;
 mod odb;
@@ -37,6 +38,12 @@ fn _pygrit(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<refs::Reference>()?;
     m.add_class::<refs::ReferenceIter>()?;
     m.add_class::<repository::Repository>()?;
+    m.add_class::<diff::Diff>()?;
+    m.add_class::<diff::DiffEntry>()?;
+    // AIDEV-NOTE: DiffIter is an internal iterator (like TreeIter/ReferenceIter): registered
+    // on the native module but NOT exported in python/pygrit/__init__.py's __all__. Users get
+    // one via `iter(diff)`, never by constructing it directly.
+    m.add_class::<diff::DiffIter>()?;
     // AIDEV-NOTE: RevWalk is an internal iterator (like TreeIter/ReferenceIter): registered
     // on the native module but NOT exported in python/pygrit/__init__.py's __all__. Users get
     // one via `repo.revwalk(start)`, never by constructing it directly.

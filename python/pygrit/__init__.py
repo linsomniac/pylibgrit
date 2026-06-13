@@ -5,6 +5,8 @@ import enum
 from pygrit._pygrit import (
     Blob,
     Commit,
+    Diff,
+    DiffEntry,
     GritError,
     InvalidObjectError,
     Object,
@@ -40,6 +42,8 @@ class ObjectKind(enum.IntEnum):
 __all__ = [
     "Blob",
     "Commit",
+    "Diff",
+    "DiffEntry",
     "GritError",
     "InvalidObjectError",
     "Object",
