@@ -1,0 +1,16 @@
+[package]
+name = "pygrit"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[lib]
+name = "_pygrit"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "=0.23.3", features = ["abi3-py311", "extension-module"] }
+# AIDEV-NOTE: Strategy A — exact pin of the published grit-lib crate (license MIT).
+# Bump only deliberately; keep Cargo.lock committed and build with --locked.
+grit-lib = "=0.4.1"
