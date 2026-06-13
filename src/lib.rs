@@ -26,6 +26,11 @@ fn _pygrit(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<objects::Object>()?;
     m.add_class::<objects::Commit>()?;
     m.add_class::<objects::Signature>()?;
+    m.add_class::<objects::Tree>()?;
+    m.add_class::<objects::TreeEntry>()?;
+    m.add_class::<objects::TreeIter>()?;
+    m.add_class::<objects::Blob>()?;
+    m.add_class::<objects::Tag>()?;
     m.add_class::<odb::Odb>()?;
     m.add_class::<repository::Repository>()?;
     Ok(())

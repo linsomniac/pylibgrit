@@ -91,4 +91,58 @@ impl Repository {
             .data;
         crate::objects::Commit::from_bytes(py, &data)
     }
+
+    // AIDEV-NOTE: Read any object then `parse_tree` over its bytes. A non-tree oid
+    // parses-fail → InvalidObjectError (acceptable: the caller asked for a tree). Same
+    // GIL/lifetime pattern as `commit`. The returned `Tree` OWNS its entries (Arc), so it
+    // outlives this Repository handle.
+    fn tree(
+        &self,
+        py: Python<'_>,
+        oid: &crate::objects::ObjectId,
+    ) -> PyResult<crate::objects::Tree> {
+        let want = oid.inner();
+        let data = py
+            .allow_threads(|| self.inner.odb.read(&want))
+            .map_err(map_err)?
+            .data;
+        crate::objects::Tree::from_bytes(&data)
+    }
+
+    // AIDEV-NOTE: Unlike commit/tree, a blob has no parser — its payload IS the body. But
+    // the caller asked specifically for a blob, so we VERIFY the read object's kind is Blob
+    // and raise InvalidObjectError otherwise (rather than silently returning a tree/commit's
+    // bytes). `into_boxed_slice()` moves the payload into the shared `Arc<[u8]>`.
+    fn blob(
+        &self,
+        py: Python<'_>,
+        oid: &crate::objects::ObjectId,
+    ) -> PyResult<crate::objects::Blob> {
+        let want = oid.inner();
+        let obj = py
+            .allow_threads(|| self.inner.odb.read(&want))
+            .map_err(map_err)?;
+        let grit_lib::objects::Object { kind, data } = obj;
+        if kind != grit_lib::objects::ObjectKind::Blob {
+            return Err(crate::error::InvalidObjectError::new_err(format!(
+                "object {} is a {}, not a blob",
+                want.to_hex(),
+                kind
+            )));
+        }
+        Ok(crate::objects::Blob::new(Arc::from(
+            data.into_boxed_slice(),
+        )))
+    }
+
+    // AIDEV-NOTE: Read any object then `parse_tag` over its bytes. A non-tag (or non-UTF-8)
+    // object parses-fail → InvalidObjectError. Same GIL/lifetime pattern as `commit`.
+    fn tag(&self, py: Python<'_>, oid: &crate::objects::ObjectId) -> PyResult<crate::objects::Tag> {
+        let want = oid.inner();
+        let data = py
+            .allow_threads(|| self.inner.odb.read(&want))
+            .map_err(map_err)?
+            .data;
+        crate::objects::Tag::from_bytes(py, &data)
+    }
 }

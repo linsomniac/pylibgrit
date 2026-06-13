@@ -242,8 +242,9 @@ impl Commit {
     // header blank line, INCLUDING its trailing newline. grit-lib sets raw_message to the
     // verbatim body bytes whenever it is non-empty AND (non-UTF-8 encoding OR not valid
     // UTF-8 OR not LF-terminated); otherwise raw_message is None and message.into_bytes()
-    // IS the verbatim body. So `raw_message.unwrap_or(message.into_bytes())` reproduces the
-    // exact body. We surface those bytes UNMODIFIED — so `message_bytes` equals the commit
+    // IS the verbatim body. So `raw_message.unwrap_or_else(|| message.into_bytes())`
+    // reproduces the exact body. We surface those bytes UNMODIFIED — so `message_bytes`
+    // equals the commit
     // payload's message section, which equals `git log --format=%B` MINUS the single
     // trailing newline git appends to its own output (verified in tests/test_objects.py).
     pub fn from_bytes(py: Python<'_>, data: &[u8]) -> PyResult<Self> {
@@ -320,5 +321,217 @@ impl Object {
 impl Object {
     pub fn new(id: ObjectId, kind: Py<PyAny>, data: Arc<[u8]>) -> Self {
         Self { id, kind, data }
+    }
+}
+
+// AIDEV-NOTE: Git tree entry mode -> object kind. 0o040000=tree, 0o160000=gitlink
+// (submodule, a commit), everything else (0o100644/0o100755 regular/exec, 0o120000
+// symlink) is a blob. Derived in the binding layer because grit's TreeEntry has no kind.
+fn mode_to_kind(mode: u32) -> grit_lib::objects::ObjectKind {
+    match mode {
+        0o040000 => grit_lib::objects::ObjectKind::Tree,
+        0o160000 => grit_lib::objects::ObjectKind::Commit,
+        _ => grit_lib::objects::ObjectKind::Blob,
+    }
+}
+
+// AIDEV-NOTE: Owning-iterator design (design §6). grit's parse_tree returns an OWNED
+// Vec<TreeEntry>, which we copy into Arc<[TreeEntryData]>. A `Tree` holds that Arc; its
+// `__iter__` clones the Arc into a `TreeIter`, so the iterator owns its own reference to
+// the entry data and stays valid after the parent `Tree` (and the `Repository`/`Odb` it
+// came from) is dropped. Each yielded `TreeEntry` clones one `TreeEntryData`, so it too
+// is self-contained. There are NO borrows back into grit-lib or the Python objects here.
+#[derive(Clone)]
+struct TreeEntryData {
+    name: Vec<u8>,
+    mode: u32,
+    oid: grit_lib::objects::ObjectId,
+}
+
+/// A single entry in a Git tree (one name → object id, with a file mode).
+#[pyclass(frozen, module = "pygrit._pygrit")]
+pub struct TreeEntry {
+    data: TreeEntryData,
+}
+
+#[pymethods]
+impl TreeEntry {
+    /// The entry name as raw bytes (no path separators; non-UTF-8 fidelity, design §5).
+    #[getter]
+    fn name<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.data.name)
+    }
+
+    /// The Unix file mode (e.g. `0o100644` regular, `0o040000` tree, `0o120000` symlink).
+    #[getter]
+    fn mode(&self) -> u32 {
+        self.data.mode
+    }
+
+    /// The object id of the referenced blob, sub-tree, or (for a gitlink) commit.
+    #[getter]
+    fn id(&self) -> ObjectId {
+        ObjectId::from_inner(self.data.oid)
+    }
+
+    /// The `pygrit.ObjectKind` derived from the mode (see `mode_to_kind`).
+    #[getter]
+    fn kind(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        kind_to_py(py, mode_to_kind(self.data.mode))
+    }
+}
+
+/// A parsed Git tree object: an iterable, len-able collection of `TreeEntry`.
+#[pyclass(module = "pygrit._pygrit")]
+pub struct Tree {
+    entries: Arc<[TreeEntryData]>,
+}
+
+#[pymethods]
+impl Tree {
+    fn __len__(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn __iter__(slf: PyRef<'_, Self>) -> TreeIter {
+        // Clone the Arc so the iterator owns its own reference -> outlives this Tree.
+        TreeIter {
+            entries: Arc::clone(&slf.entries),
+            idx: 0,
+        }
+    }
+}
+
+impl Tree {
+    // AIDEV-NOTE: Parse a tree from the raw object payload (an odb read's `.data`).
+    // We copy grit's owned TreeEntry Vec into Arc<[TreeEntryData]> so the typed view
+    // owns all its data independently of grit-lib / the odb buffer.
+    pub fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        let entries = grit_lib::objects::parse_tree(data).map_err(map_err)?;
+        let v: Vec<TreeEntryData> = entries
+            .into_iter()
+            .map(|e| TreeEntryData {
+                name: e.name,
+                mode: e.mode,
+                oid: e.oid,
+            })
+            .collect();
+        Ok(Self {
+            entries: Arc::from(v),
+        })
+    }
+}
+
+/// Iterator over a `Tree`'s entries; owns its own `Arc` so it outlives the `Tree`.
+#[pyclass(module = "pygrit._pygrit")]
+pub struct TreeIter {
+    entries: Arc<[TreeEntryData]>,
+    idx: usize,
+}
+
+#[pymethods]
+impl TreeIter {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(&mut self) -> Option<TreeEntry> {
+        let e = self.entries.get(self.idx)?.clone();
+        self.idx += 1;
+        Some(TreeEntry { data: e })
+    }
+}
+
+// AIDEV-NOTE: `Blob` owns its bytes via `Arc<[u8]>` (shared with the odb read's payload,
+// no copy). `frozen` (immutable). The blob payload is the raw object body verbatim.
+#[pyclass(frozen, module = "pygrit._pygrit")]
+pub struct Blob {
+    data: Arc<[u8]>,
+}
+
+#[pymethods]
+impl Blob {
+    /// The raw blob bytes (the object body, verbatim).
+    #[getter]
+    fn data<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.data)
+    }
+}
+
+impl Blob {
+    pub fn new(data: Arc<[u8]>) -> Self {
+        Self { data }
+    }
+}
+
+// AIDEV-NOTE: `Tag` is a binding-layer typed view over grit_lib::objects::parse_tag.
+// `frozen` (immutable). FIDELITY LIMITATION: grit-lib 0.4.1's `parse_tag` requires the
+// WHOLE tag object to be valid UTF-8 (it errors otherwise) and TagData exposes tag/tagger/
+// message ONLY as `String` — there are NO `*_raw: Vec<u8>` byte-fidelity fields like
+// CommitData has. So, unlike Commit, a Tag cannot preserve non-UTF-8 bytes in its name,
+// tagger ident, or message; we surface `String::into_bytes()` of those decoded values.
+// `tagger` is parsed into a Signature from the (UTF-8) ident string's bytes.
+//
+// MESSAGE NEWLINE CONTRACT: grit's parse_tag accumulates the post-blank-line body and
+// strips exactly ONE trailing '\n' that its `split('\n')` adds. So for a body of
+// "release one\n" (git appends a trailing LF to `-m` messages), TagData.message ==
+// "release one\n", i.e. it KEEPS the body's own trailing newline. We surface those bytes
+// unmodified, so `tag.message_bytes` == the tag object's message section verbatim.
+#[pyclass(frozen, module = "pygrit._pygrit")]
+pub struct Tag {
+    target: ObjectId,
+    name: Vec<u8>,
+    tagger: Option<Py<Signature>>,
+    message: Vec<u8>,
+}
+
+#[pymethods]
+impl Tag {
+    /// The object this tag points to (usually a commit).
+    #[getter]
+    fn target(&self) -> ObjectId {
+        self.target.clone()
+    }
+
+    /// The short tag name as raw bytes (e.g. `b"v1"`).
+    #[getter]
+    fn name<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.name)
+    }
+
+    /// The tagger `Signature`, or `None` for a tag with no tagger header.
+    #[getter]
+    fn tagger(&self, py: Python<'_>) -> Option<Py<Signature>> {
+        self.tagger.as_ref().map(|s| s.clone_ref(py))
+    }
+
+    /// The raw tag message bytes (the object body after the header blank line).
+    #[getter]
+    fn message_bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.message)
+    }
+}
+
+impl Tag {
+    // AIDEV-NOTE: Parse a tag from the raw object payload (an odb read's `.data`).
+    // target/name/message come straight from TagData. The tagger Signature is built from
+    // the ident string's bytes (Signature::parse splits name/email and parses the time);
+    // since grit gives only a UTF-8 `String`, we pass `tagger.as_bytes()` for BOTH the raw
+    // split and the time string (no separate raw-bytes header available — see fidelity note).
+    pub fn from_bytes(py: Python<'_>, data: &[u8]) -> PyResult<Self> {
+        let t = grit_lib::objects::parse_tag(data).map_err(map_err)?;
+        let target = ObjectId::from_inner(t.object);
+        let name = t.tag.into_bytes();
+        let tagger = match t.tagger {
+            Some(ident) => Some(Py::new(py, Signature::parse(ident.as_bytes(), &ident))?),
+            None => None,
+        };
+        let message = t.message.into_bytes();
+        Ok(Self {
+            target,
+            name,
+            tagger,
+            message,
+        })
     }
 }

@@ -5,6 +5,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from tests.gitlib import cat_file_data, git_text, rev_parse
 
 
@@ -220,3 +222,77 @@ def test_commit_non_utf8_author_name(tmp_path: Path, git_env: dict[str, str]) ->
         _ = commit.author.name_str
     # caller-overridable decode via message() codec on the commit; name decodes under latin-1.
     assert commit.author.name.decode("latin-1") == "José"
+
+
+def test_tree_entries_match_git(simple_repo: Path) -> None:
+    import pygrit
+
+    from tests.gitlib import rev_parse, run_git
+
+    tree_oid = rev_parse(simple_repo, "HEAD^{tree}")
+    repo = pygrit.Repository.discover(str(simple_repo))
+    tree = repo.tree(pygrit.ObjectId.from_hex(tree_oid))
+    raw = run_git(
+        simple_repo, "ls-tree", "-z", tree_oid
+    )  # "<mode> <type> <oid>\t<name>\0"
+    expected_names = {rec.split(b"\t", 1)[1] for rec in raw.split(b"\0") if rec}
+    assert {e.name for e in tree} == expected_names
+    a = next(e for e in tree if e.name == b"a.txt")
+    assert a.mode == 0o100644
+    assert a.kind is pygrit.ObjectKind.BLOB
+    assert a.id.hex == rev_parse(simple_repo, "HEAD:a.txt")
+    d = next(e for e in tree if e.name == b"dir")
+    assert d.kind is pygrit.ObjectKind.TREE
+
+
+def test_blob_data_matches_git(simple_repo: Path) -> None:
+    import pygrit
+
+    from tests.gitlib import cat_file_data, rev_parse
+
+    blob_oid = rev_parse(simple_repo, "HEAD:a.txt")
+    repo = pygrit.Repository.discover(str(simple_repo))
+    blob = repo.blob(pygrit.ObjectId.from_hex(blob_oid))
+    assert blob.data == cat_file_data(simple_repo, blob_oid)
+
+
+def test_blob_on_non_blob_raises(simple_repo: Path) -> None:
+    import pygrit
+
+    from tests.gitlib import rev_parse
+
+    repo = pygrit.Repository.discover(str(simple_repo))
+    tree_oid = rev_parse(simple_repo, "HEAD^{tree}")
+    with pytest.raises(pygrit.InvalidObjectError):
+        repo.blob(pygrit.ObjectId.from_hex(tree_oid))
+
+
+def test_tag_fields_match_git(tmp_path: Path, git_env: dict[str, str]) -> None:
+    import pygrit
+
+    from tests.gitlib import rev_parse
+
+    repo = tmp_path / "tagrepo"
+    repo.mkdir()
+    subprocess.run(
+        ["git", "init", "-q", "-b", "main"], cwd=repo, env=git_env, check=True
+    )
+    (repo / "f").write_text("x\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, env=git_env, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "c"], cwd=repo, env=git_env, check=True
+    )
+    subprocess.run(
+        ["git", "tag", "-a", "v1", "-m", "release one"],
+        cwd=repo,
+        env=git_env,
+        check=True,
+    )
+    tag_oid = rev_parse(repo, "v1")  # annotated tag object
+    pyrepo = pygrit.Repository.discover(str(repo))
+    tag = pyrepo.tag(pygrit.ObjectId.from_hex(tag_oid))
+    assert tag.name == b"v1"
+    assert tag.target.hex == rev_parse(repo, "v1^{commit}")
+    assert tag.message_bytes == b"release one\n"  # grit keeps the body's trailing LF
+    assert tag.tagger is not None
+    assert tag.tagger.name == b"Test Committer"
