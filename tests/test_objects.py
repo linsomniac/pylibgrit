@@ -17,6 +17,9 @@ def test_commit_fields_match_git(simple_repo: Path) -> None:
     repo = pygrit.Repository.discover(str(simple_repo))
     commit = repo.commit(pygrit.ObjectId.from_hex(oid))
 
+    # the commit's own id (self-describing; needed by revwalk)
+    assert commit.id.hex == oid
+
     # tree / parents oracled against git
     assert commit.tree.hex == rev_parse(simple_repo, "HEAD^{tree}")
     assert commit.parents == []

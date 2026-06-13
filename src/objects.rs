@@ -184,8 +184,13 @@ fn split_name_email(raw: &[u8]) -> (Vec<u8>, Vec<u8>) {
 // AIDEV-NOTE: `Commit` is a binding-layer typed view over grit_lib::objects::parse_commit.
 // `frozen` (immutable). author/committer are wrapped Py<Signature>; message is the EXACT
 // raw body bytes (see from_bytes). tree/parents are pygrit ObjectIds.
+//
+// AIDEV-NOTE: `id` makes a Commit self-describing — required because `revwalk` (Phase 4)
+// yields bare `Commit` objects (no surrounding oid), so each must carry its own id. The
+// caller of `from_bytes` supplies it (parse_commit does NOT compute the object's own oid).
 #[pyclass(frozen, module = "pygrit._pygrit")]
 pub struct Commit {
+    id: ObjectId,
     tree: ObjectId,
     parents: Vec<ObjectId>,
     author: Py<Signature>,
@@ -195,6 +200,12 @@ pub struct Commit {
 
 #[pymethods]
 impl Commit {
+    /// This commit's own object id.
+    #[getter]
+    fn id(&self) -> ObjectId {
+        self.id.clone()
+    }
+
     /// The tree this commit points to.
     #[getter]
     fn tree(&self) -> ObjectId {
@@ -247,7 +258,7 @@ impl Commit {
     // equals the commit
     // payload's message section, which equals `git log --format=%B` MINUS the single
     // trailing newline git appends to its own output (verified in tests/test_objects.py).
-    pub fn from_bytes(py: Python<'_>, data: &[u8]) -> PyResult<Self> {
+    pub fn from_bytes(py: Python<'_>, id: ObjectId, data: &[u8]) -> PyResult<Self> {
         let c = grit_lib::objects::parse_commit(data).map_err(map_err)?;
         let tree = ObjectId::from_inner(c.tree);
         let parents = c.parents.into_iter().map(ObjectId::from_inner).collect();
@@ -255,6 +266,7 @@ impl Commit {
         let committer = Py::new(py, Signature::parse(&c.committer_raw, &c.committer))?;
         let message = c.raw_message.unwrap_or_else(|| c.message.into_bytes());
         Ok(Self {
+            id,
             tree,
             parents,
             author,

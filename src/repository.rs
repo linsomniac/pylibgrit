@@ -89,7 +89,7 @@ impl Repository {
             .allow_threads(|| self.inner.odb.read(&want))
             .map_err(map_err)?
             .data;
-        crate::objects::Commit::from_bytes(py, &data)
+        crate::objects::Commit::from_bytes(py, oid.clone(), &data)
     }
 
     // AIDEV-NOTE: Read any object then `parse_tree` over its bytes. A non-tree oid
