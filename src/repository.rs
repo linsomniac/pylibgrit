@@ -204,4 +204,43 @@ impl Repository {
             .map_err(map_err)?;
         Ok(crate::objects::ObjectId::from_inner(oid))
     }
+
+    // AIDEV-NOTE: revwalk PRECOMPUTES the ordered oid sequence via grit-lib's batch
+    // `rev_list`, then hands it to a lazy `RevWalk` iterator that reads+parses each commit
+    // on demand (see src/revwalk.rs). The walk holds its own `Arc<Repository>`, so it
+    // outlives this handle (design §6). The start is passed as an `ObjectId` (the plan calls
+    // `repo.resolve("HEAD")`); we convert it to a 40/64-char hex spec for rev_list, which
+    // treats positive specs as commit tips and returns all reachable ancestors in order.
+    //
+    // AIDEV-NOTE: ORDERING is added in Task 4.2; for now the walk uses rev_list's default
+    // order (committer-date reverse-chronological), which matches `git rev-list HEAD`.
+    #[pyo3(signature = (start, *, order=None))]
+    fn revwalk(
+        &self,
+        py: Python<'_>,
+        start: &crate::objects::ObjectId,
+        order: Option<&str>,
+    ) -> PyResult<crate::revwalk::RevWalk> {
+        use grit_lib::rev_list::{OutputMode, RevListOptions};
+
+        let options = RevListOptions {
+            output_mode: OutputMode::OidOnly,
+            ..Default::default()
+        };
+        // Ordering handling added in Task 4.2.
+        let _ = order;
+
+        let spec = start.inner().to_hex();
+        let positive = vec![spec];
+        let repo = Arc::clone(&self.inner);
+        // `rev_list` takes `&Repository`; we deref the owned Arc clone inside the closure so
+        // nothing borrows `self` across the allow_threads boundary.
+        let result = py
+            .allow_threads(|| grit_lib::rev_list::rev_list(&repo, &positive, &[], &options))
+            .map_err(map_err)?;
+        Ok(crate::revwalk::RevWalk::new(
+            Arc::clone(&self.inner),
+            result.commits,
+        ))
+    }
 }

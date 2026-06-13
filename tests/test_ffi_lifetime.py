@@ -64,3 +64,18 @@ def test_head_reference_peel_outlives_repository(simple_repo: Path) -> None:
     gc.collect()
     # peel() of a symbolic HEAD dereferences the Reference's own Arc<Repository>.
     assert head.peel().hex == head_oid
+
+
+def test_revwalk_outlives_repository(simple_repo: Path) -> None:
+    import pygrit
+
+    head_oid = rev_parse(simple_repo, "HEAD")
+    repo = pygrit.Repository.discover(str(simple_repo))
+    head = repo.resolve("HEAD")
+    walk = repo.revwalk(head)
+    del repo
+    gc.collect()
+    # RevWalk owns Arc<Repository> + Arc<[ObjectId]>; per-step odb reads must still work
+    # after the parent Repository is dropped.
+    oids = [c.id.hex for c in walk]
+    assert oids == [head_oid]
