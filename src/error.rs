@@ -45,11 +45,6 @@ create_exception!(
 // the crate would fail to compile against any future grit-lib that adds a variant.
 // Each arm formats the source error (`format!("{e}")`) into the message so the
 // offending path/OID/message is preserved for the caller.
-//
-// AIDEV-NOTE: `#[allow(dead_code)]` is intentional — `map_err` has no caller yet at
-// Task 2.2; ObjectId (Task 2.3) and the odb read path (Task 2.6+) consume it. Remove
-// the allow once a fallible binding routes a grit-lib error through this function.
-#[allow(dead_code)]
 pub fn map_err(e: grit_lib::error::Error) -> PyErr {
     use grit_lib::error::Error;
     let msg = format!("{e}");

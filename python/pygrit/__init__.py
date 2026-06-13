@@ -3,6 +3,7 @@
 from pygrit._pygrit import (
     GritError,
     InvalidObjectError,
+    ObjectId,
     ObjectNotFoundError,
     RepositoryError,
     _discover_head_hex,
@@ -12,6 +13,7 @@ from pygrit._pygrit import (
 __all__ = [
     "GritError",
     "InvalidObjectError",
+    "ObjectId",
     "ObjectNotFoundError",
     "RepositoryError",
     "_discover_head_hex",

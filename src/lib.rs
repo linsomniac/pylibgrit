@@ -14,6 +14,7 @@ use grit_lib::repo::Repository;
 use grit_lib::rev_parse::resolve_revision;
 
 mod error;
+mod objects;
 
 /// Returns the pygrit version string. Smoke-test entry point for the spike.
 #[pyfunction]
@@ -42,5 +43,6 @@ fn _pygrit(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(_hello, m)?)?;
     m.add_function(wrap_pyfunction!(_discover_head_hex, m)?)?;
     error::register(m)?;
+    m.add_class::<objects::ObjectId>()?;
     Ok(())
 }
