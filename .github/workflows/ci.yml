@@ -15,8 +15,12 @@
 #     honored by the @master ref, NOT by @stable, so the version goes in the ref.
 #   * All cargo/maturin builds use --locked (committed Cargo.lock) for
 #     reproducibility, matching the local `--locked` workflow.
-#   * setup-uv is pinned to the current major (@v8). Dev deps live in
+#   * setup-uv is pinned to a full version (@v8.2.0): astral-sh/setup-uv
+#     publishes only full vX.Y.Z tags, NOT a floating major tag, so `@v8` does
+#     not resolve. Bump this pin when updating uv. Dev deps live in
 #     [dependency-groups] (PEP 735), installed via `uv sync --group dev`.
+#   * build-wheels also installs setup-uv: the sdist step shells out to
+#     `uvx maturin sdist`, so uv must be on PATH (harmless on legs that skip it).
 #   * macOS (macos-14 / Apple-silicon aarch64) is best-effort: grit-lib is
 #     Unix-oriented and the deps are pure-Rust, so it is expected to build, but
 #     fail-fast is disabled so a macOS hiccup does not mask Linux results.
@@ -52,7 +56,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - uses: astral-sh/setup-uv@v8
+      - uses: astral-sh/setup-uv@v8.2.0
       - run: uv sync --group dev
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
@@ -69,7 +73,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.94.1
       - uses: Swatinem/rust-cache@v2
-      - uses: astral-sh/setup-uv@v8
+      - uses: astral-sh/setup-uv@v8.2.0
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --group dev
@@ -97,6 +101,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.94.1
+      # The sdist step (x86_64 only) calls `uvx maturin sdist`; uv must be on
+      # PATH. Harmless on the legs that skip that step.
+      - uses: astral-sh/setup-uv@v8.2.0
       - uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
