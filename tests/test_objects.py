@@ -227,9 +227,7 @@ def test_commit_non_utf8_author_name(tmp_path: Path, git_env: dict[str, str]) ->
     assert commit.author.name.decode("latin-1") == "José"
 
 
-def test_commit_message_error_handlers(
-    tmp_path: Path, git_env: dict[str, str]
-) -> None:
+def test_commit_message_error_handlers(tmp_path: Path, git_env: dict[str, str]) -> None:
     """message(errors=...) must support non-strict handlers (surrogateescape/replace).
 
     AIDEV-NOTE: A non-UTF-8 message decoded with errors="surrogateescape" yields a str
