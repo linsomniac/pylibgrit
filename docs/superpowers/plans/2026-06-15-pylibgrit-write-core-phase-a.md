@@ -621,8 +621,10 @@ Then add:
 ```rust
 // AIDEV-NOTE: `Index` owns a grit_lib::index::Index behind a Mutex (binding-owned mutable
 // value; grit's Index mutators take &mut self) plus an Arc<Repository> so write_tree can reach
-// the odb and write() can target the repo's default index path. Mutating methods lock the
-// Mutex briefly under the GIL; the actual disk write releases the GIL.
+// the odb and write() can target the repo's default index path. Index methods run UNDER the GIL:
+// a std MutexGuard is !Send and cannot be held across allow_threads, and Phase A index ops are
+// fast enough that this is fine. (stage()'s odb blob write does release the GIL — it never holds
+// the guard during the heavy work; see Task 6.)
 #[pyclass(module = "pylibgrit._pylibgrit")]
 pub struct Index {
     inner: Mutex<grit_lib::index::Index>,
@@ -674,19 +676,19 @@ impl Index {
 
     // AIDEV-NOTE: Persist the index. `path=None` writes the repo's default index (via
     // Repository::write_index, which honors sparse-index collapsing); an explicit path uses
-    // Index::write directly. extract_path touches Python, so resolve it before releasing the GIL.
+    // Index::write directly. Runs under the GIL — a std MutexGuard is !Send so it cannot be held
+    // across allow_threads, and index serialization is fast enough that this is fine for Phase A.
     #[pyo3(signature = (path=None))]
-    fn write(&self, py: Python<'_>, path: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+    fn write(&self, path: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
         match path {
             None => {
                 let mut guard = self.inner.lock().unwrap();
-                py.allow_threads(|| self.repo.write_index(&mut guard))
-                    .map_err(map_err)
+                self.repo.write_index(&mut guard).map_err(map_err)
             }
             Some(p) => {
                 let pathbuf = crate::repository::extract_path(p)?;
                 let guard = self.inner.lock().unwrap();
-                py.allow_threads(|| guard.write(&pathbuf)).map_err(map_err)
+                guard.write(&pathbuf).map_err(map_err)
             }
         }
     }
@@ -794,12 +796,12 @@ Expected: FAIL — `Index` has no `write_tree`.
 
 ```rust
     // AIDEV-NOTE: Build a tree object from the current in-memory index and return its oid
-    // (== `git write-tree`). prefix="" means the whole index from the root. Writes the tree
-    // (and any sub-trees) into the odb; releases the GIL.
-    fn write_tree(&self, py: Python<'_>) -> PyResult<ObjectId> {
+    // (== `git write-tree`). prefix="" means the whole index from the root; writes the tree (and
+    // any sub-trees) into the odb. Runs under the GIL — the MutexGuard is !Send so it cannot
+    // cross allow_threads. (A future optimization could clone the Index to release the GIL.)
+    fn write_tree(&self) -> PyResult<ObjectId> {
         let guard = self.inner.lock().unwrap();
-        let oid = py
-            .allow_threads(|| grit_lib::write_tree::write_tree_from_index(&self.repo.odb, &guard, ""))
+        let oid = grit_lib::write_tree::write_tree_from_index(&self.repo.odb, &guard, "")
             .map_err(map_err)?;
         Ok(ObjectId::from_inner(oid))
     }
