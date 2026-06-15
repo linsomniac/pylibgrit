@@ -76,6 +76,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@1.94.1
+        with:
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - uses: astral-sh/setup-uv@v8.2.0
         with:
@@ -113,6 +115,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@1.94.1
+        with:
+          # Pre-install the rust-toolchain.toml components so a later host `cargo`/
+          # `maturin` call can't trigger a flaky lazy rustup re-add of clippy.
+          components: rustfmt, clippy
       # The sdist step (x86_64 only) calls `uvx maturin sdist`; uv must be on
       # PATH. Harmless on the legs that skip that step.
       - uses: astral-sh/setup-uv@v8.2.0
