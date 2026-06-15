@@ -201,6 +201,22 @@ impl Index {
         Ok(())
     }
 
+    fn __len__(&self) -> usize {
+        self.inner.lock().unwrap().entries.len()
+    }
+
+    // AIDEV-NOTE: Snapshot the entries at iteration time into the iterator (owning design,
+    // mirroring TreeIter/ReferenceIter). The iterator outlives this Index and is unaffected by
+    // later mutations. grit's Index exposes its entries via the public `entries` Vec field.
+    fn __iter__(&self) -> IndexEntryIter {
+        let snapshot: Vec<grit_lib::index::IndexEntry> =
+            self.inner.lock().unwrap().entries.clone();
+        IndexEntryIter {
+            entries: snapshot.into(),
+            idx: 0,
+        }
+    }
+
     // AIDEV-NOTE: Persist the index. `path=None` writes the repo's default index (via
     // Repository::write_index, which honors sparse-index collapsing); an explicit path uses
     // Index::write directly. Runs under the GIL — a std MutexGuard is !Send so it cannot be held
@@ -218,6 +234,26 @@ impl Index {
                 guard.write(&pathbuf).map_err(map_err)
             }
         }
+    }
+}
+
+/// Iterator over a snapshot of an `Index`'s entries; owns its data.
+#[pyclass(module = "pylibgrit._pylibgrit")]
+pub struct IndexEntryIter {
+    entries: Arc<[grit_lib::index::IndexEntry]>,
+    idx: usize,
+}
+
+#[pymethods]
+impl IndexEntryIter {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(&mut self) -> Option<IndexEntry> {
+        let e = self.entries.get(self.idx)?.clone();
+        self.idx += 1;
+        Some(IndexEntry { inner: e })
     }
 }
 

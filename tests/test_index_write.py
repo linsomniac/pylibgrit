@@ -134,3 +134,20 @@ def test_stage_bare_repo_raises(tmp_path, git_env):
     idx = pg.index()
     with pytest.raises(pylibgrit.RepositoryError):
         idx.stage(b"a.txt")
+
+
+def test_index_len_and_iter(tmp_path, git_env):
+    import pylibgrit
+
+    repo = tmp_path / "r"
+    repo.mkdir()
+    _init(repo, git_env)
+    pg = pylibgrit.Repository.open(str(repo / ".git"))
+    b1 = pg.odb.write(pylibgrit.ObjectKind.BLOB, b"1\n")
+    b2 = pg.odb.write(pylibgrit.ObjectKind.BLOB, b"2\n")
+    idx = pg.index()
+    idx.add(b"a.txt", b1, 0o100644)
+    idx.add(b"b.txt", b2, 0o100644)
+    assert len(idx) == 2
+    names = sorted(e.path for e in idx)
+    assert names == [b"a.txt", b"b.txt"]

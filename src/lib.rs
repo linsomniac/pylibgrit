@@ -32,6 +32,10 @@ fn _pylibgrit(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<objects::Tag>()?;
     m.add_class::<index::Index>()?;
     m.add_class::<index::IndexEntry>()?;
+    // AIDEV-NOTE: IndexEntryIter is an internal iterator (like TreeIter/ReferenceIter): registered
+    // on the native module but NOT exported in python/pylibgrit/__init__.py's __all__. Users get
+    // one via `iter(index)`, never by constructing it directly.
+    m.add_class::<index::IndexEntryIter>()?;
     m.add_class::<odb::Odb>()?;
     m.add_class::<refs::Reference>()?;
     m.add_class::<refs::ReferenceIter>()?;
