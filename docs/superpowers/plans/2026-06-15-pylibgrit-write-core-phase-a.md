@@ -2140,9 +2140,11 @@ Replace the entire `update_ref` from Task 11 with this final version (adds `mess
         py.allow_threads(|| grit_lib::refs::write_ref(&git_dir, &refname, &new_oid))
             .map_err(map_err)?;
         if let Some((ident, msg)) = reflog {
+            // force_create=true: message= is an explicit opt-in, so guarantee the entry rather
+            // than depending on grit-lib's core.logAllRefUpdates auto-create default.
             py.allow_threads(|| {
                 grit_lib::refs::append_reflog(
-                    &git_dir, &refname, &old_for_log, &new_oid, &ident, &msg, false,
+                    &git_dir, &refname, &old_for_log, &new_oid, &ident, &msg, true,
                 )
             })
             .map_err(map_err)?;
@@ -2192,8 +2194,9 @@ Then replace the entire `delete_ref` from Task 11 with this final version (adds 
 
         if let (Some((ident, msg)), Some(cur)) = (&reflog, &current) {
             let zero = crate::refs::zero_like(cur);
+            // force_create=true: explicit opt-in via message= (see update_ref).
             py.allow_threads(|| {
-                grit_lib::refs::append_reflog(&git_dir, &refname, cur, &zero, ident, msg, false)
+                grit_lib::refs::append_reflog(&git_dir, &refname, cur, &zero, ident, msg, true)
             })
             .map_err(map_err)?;
         }
