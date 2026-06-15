@@ -117,15 +117,40 @@ impl Signature {
     // AIDEV-NOTE: Write-side constructor. `when` is (unix_seconds, utc_offset_seconds); the
     // offset is signed and in SECONDS (e.g. +05:30 -> 19800). name/email are raw bytes for
     // non-UTF-8 fidelity (design §5). The Git wire form is produced by `wire_bytes`/`raw`.
+    //
+    // AIDEV-NOTE: Validates name/email for git ident injection (NUL/LF/CR/</>  corrupt the
+    // wire ident `Name <email> <unix> <+HHMM>`) and rejects timezone offsets that are out of
+    // range or not minute-aligned (i32::MIN passed to format_tz_offset would panic via abs).
     #[new]
     #[pyo3(signature = (name, email, when))]
-    fn new(name: Vec<u8>, email: Vec<u8>, when: (i64, i32)) -> Self {
-        Self {
+    fn new(name: Vec<u8>, email: Vec<u8>, when: (i64, i32)) -> PyResult<Self> {
+        for (field, bytes) in [("name", &name), ("email", &email)] {
+            if bytes
+                .iter()
+                .any(|&b| matches!(b, 0 | b'\n' | b'\r' | b'<' | b'>'))
+            {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "signature {field} must not contain NUL, newline, '<' or '>'"
+                )));
+            }
+        }
+        let offset = when.1;
+        if !(-86_400..=86_400).contains(&offset) {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "timezone offset out of range (must be within +/-24h)",
+            ));
+        }
+        if offset % 60 != 0 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "timezone offset must be a whole number of minutes",
+            ));
+        }
+        Ok(Self {
             name,
             email,
             when_secs: when.0,
-            when_offset_secs: when.1,
-        }
+            when_offset_secs: offset,
+        })
     }
 
     /// The Git wire ident bytes: `Name <email> <unix-seconds> <+HHMM>`.

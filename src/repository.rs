@@ -266,18 +266,14 @@ impl Repository {
         ))
     }
 
-    // AIDEV-NOTE: Load the repo's index into a binding-owned, mutable Index. If no index file
-    // exists yet (fresh repo / bare repo before any staging), start from an empty Index rather
-    // than erroring. We check the conventional `<git_dir>/index` path; GIT_INDEX_FILE overrides
-    // are not honored here (Phase A limitation). The load releases the GIL.
+    // AIDEV-NOTE: Always load via grit's load_index — it returns an empty index with the REPO's
+    // hash algo when the file is absent (load_expand_sparse_optional handles NotFound), so this is
+    // correct for fresh repos AND SHA-256 repos. (An earlier exists()-check + Index::new() fallback
+    // defaulted to SHA-1 for a fresh SHA-256 repo.)
     fn index(&self, py: Python<'_>) -> PyResult<crate::index::Index> {
-        let index_path = self.inner.git_dir.join("index");
-        let loaded = if index_path.exists() {
-            py.allow_threads(|| self.inner.load_index())
-                .map_err(map_err)?
-        } else {
-            grit_lib::index::Index::new()
-        };
+        let loaded = py
+            .allow_threads(|| self.inner.load_index())
+            .map_err(map_err)?;
         Ok(crate::index::Index::new_loaded(
             loaded,
             Arc::clone(&self.inner),
@@ -437,9 +433,7 @@ impl Repository {
                 "pass create=True or expected_old=, not both",
             ));
         }
-        let refname = std::str::from_utf8(&name)
-            .map_err(|_| crate::error::invalid_ref("non-UTF-8 ref name"))?
-            .to_owned();
+        let refname = validate_ref_name(&name)?;
         let reflog = reflog_args(message, signer.as_deref())?;
         let git_dir = self.inner.git_dir.clone();
         let new_oid = target.inner();
@@ -505,9 +499,7 @@ impl Repository {
         message: Option<Vec<u8>>,
         signer: Option<PyRef<'_, crate::objects::Signature>>,
     ) -> PyResult<()> {
-        let refname = std::str::from_utf8(&name)
-            .map_err(|_| crate::error::invalid_ref("non-UTF-8 ref name"))?
-            .to_owned();
+        let refname = validate_ref_name(&name)?;
         let git_dir = self.inner.git_dir.clone();
         let reflog = reflog_args(message, signer.as_deref())?;
         let current = py.allow_threads(|| crate::refs::read_current_oid(&git_dir, &refname));
@@ -560,11 +552,10 @@ impl Repository {
         message: Vec<u8>,
         force_create: bool,
     ) -> PyResult<()> {
-        let refname = std::str::from_utf8(&name)
-            .map_err(|_| crate::error::invalid_ref("non-UTF-8 ref name"))?
-            .to_owned();
+        let refname = validate_ref_name(&name)?;
         let ident = utf8_field("signer", signer.wire_bytes())?;
         let msg = utf8_field("reflog message", message)?;
+        reject_wire_control("reflog message", &msg)?;
         let git_dir = self.inner.git_dir.clone();
         let (old_oid, new_oid) = (old.inner(), new.inner());
         py.allow_threads(|| {
@@ -582,24 +573,20 @@ impl Repository {
     }
 
     // AIDEV-NOTE: Point HEAD at a branch (symbolic ref). target is a ref name, e.g.
-    // b"refs/heads/main". Must be UTF-8.
+    // b"refs/heads/main". Must be a valid ref name. The hardcoded "HEAD" literal passed to
+    // grit stays as-is — only the target (the ref name HEAD should point to) is validated.
     fn set_head(&self, py: Python<'_>, target: Vec<u8>) -> PyResult<()> {
-        let target_str = std::str::from_utf8(&target)
-            .map_err(|_| crate::error::invalid_ref("non-UTF-8 ref target"))?
-            .to_owned();
+        let target_str = validate_ref_name(&target)?;
         let git_dir = self.inner.git_dir.clone();
         py.allow_threads(|| grit_lib::refs::write_symbolic_ref(&git_dir, "HEAD", &target_str))
             .map_err(map_err)
     }
 
-    // AIDEV-NOTE: Write an arbitrary symbolic ref (name -> target ref name). Both must be UTF-8.
+    // AIDEV-NOTE: Write an arbitrary symbolic ref (name -> target ref name). Both must be valid
+    // ref names (validated via check_refname_format with allow_onelevel to permit HEAD-like names).
     fn set_symbolic_ref(&self, py: Python<'_>, name: Vec<u8>, target: Vec<u8>) -> PyResult<()> {
-        let name_str = std::str::from_utf8(&name)
-            .map_err(|_| crate::error::invalid_ref("non-UTF-8 ref name"))?
-            .to_owned();
-        let target_str = std::str::from_utf8(&target)
-            .map_err(|_| crate::error::invalid_ref("non-UTF-8 ref target"))?
-            .to_owned();
+        let name_str = validate_ref_name(&name)?;
+        let target_str = validate_ref_name(&target)?;
         let git_dir = self.inner.git_dir.clone();
         py.allow_threads(|| grit_lib::refs::write_symbolic_ref(&git_dir, &name_str, &target_str))
             .map_err(map_err)
@@ -639,10 +626,12 @@ impl Repository {
                 Some(utf8_field("tagger", bytes)?)
             }
         };
+        let tag_name_string = utf8_field("tag name", name)?;
+        reject_wire_control("tag name", &tag_name_string)?;
         let tdata = grit_lib::objects::TagData {
             object: target.inner(),
             object_type: type_str.to_owned(),
-            tag: utf8_field("tag name", name)?,
+            tag: tag_name_string,
             tagger: tagger_str,
             message: utf8_field("tag message", message)?,
         };
@@ -840,6 +829,32 @@ pub(crate) fn read_blob_bytes(
     Ok(obj.data)
 }
 
+// AIDEV-NOTE: Validate a ref name before handing it to grit-lib, which joins it to the git dir
+// unchecked (an absolute or '..' name would escape). allow_onelevel=true so one-level pseudorefs
+// like HEAD are accepted. Returns the validated UTF-8 name; RepositoryError on a malformed name.
+fn validate_ref_name(name: &[u8]) -> PyResult<String> {
+    let s =
+        std::str::from_utf8(name).map_err(|_| crate::error::invalid_ref("non-UTF-8 ref name"))?;
+    let opts = grit_lib::check_ref_format::RefNameOptions {
+        allow_onelevel: true,
+        refspec_pattern: false,
+        normalize: false,
+    };
+    grit_lib::check_ref_format::check_refname_format(s, &opts)
+        .map_err(|e| crate::error::invalid_ref(&format!("invalid ref name: {s:?}: {e}")))
+}
+
+// AIDEV-NOTE: Reject bytes that would corrupt a single-line wire record (reflog entry) or an
+// object header line (tag name). NUL/LF/CR are the structural delimiters.
+fn reject_wire_control(what: &str, s: &str) -> PyResult<()> {
+    if s.bytes().any(|b| matches!(b, 0 | b'\n' | b'\r')) {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "{what} must not contain NUL, newline, or carriage return"
+        )));
+    }
+    Ok(())
+}
+
 // AIDEV-NOTE: Resolve the optional reflog request for a ref op. Returns Some((identity, message))
 // only when a message is given; a message without a signer is a usage error. append_reflog wants
 // the full wire identity ("Name <email> <unix> <+HHMM>") and a UTF-8 message. signer.wire_bytes()
@@ -856,6 +871,7 @@ fn reflog_args(
             })?;
             let ident = utf8_field("signer", signer.wire_bytes())?;
             let msg = utf8_field("reflog message", msg)?;
+            reject_wire_control("reflog message", &msg)?;
             Ok(Some((ident, msg)))
         }
     }

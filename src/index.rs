@@ -8,6 +8,35 @@ use pyo3::types::PyBytes;
 use crate::error::map_err;
 use crate::objects::ObjectId;
 
+// AIDEV-NOTE: grit-lib joins index/tree paths directly, so a leading '/' triggers infinite
+// recursion in write_tree (stack overflow) and '..'/absolute components escape the worktree.
+// Reject anything that isn't a clean relative Git path before it can reach grit-lib.
+fn validate_index_path(path: &[u8]) -> PyResult<()> {
+    if path.is_empty() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "index path must not be empty",
+        ));
+    }
+    if path.contains(&0) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "index path must not contain NUL",
+        ));
+    }
+    if path.first() == Some(&b'/') || path.last() == Some(&b'/') {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "index path must be relative (no leading or trailing '/')",
+        ));
+    }
+    for comp in path.split(|&b| b == b'/') {
+        if comp.is_empty() || comp == b"." || comp == b".." {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "index path components must be nonempty and not '.' or '..'",
+            ));
+        }
+    }
+    Ok(())
+}
+
 // AIDEV-NOTE: Wraps grit_lib::index::IndexEntry (a 15-field struct). The constructor exposes
 // the settable stat/mode/oid/path/flags subset; flags_extended is always None and
 // base_index_pos always 0 (split-index is not a Phase A concern). `flags` defaults to 0; the
@@ -132,7 +161,9 @@ impl Index {
     // AIDEV-NOTE: Add a synthetic entry (blob already in the odb). Stat fields are zeroed (the
     // commit_tree.rs pattern); `flags` carries the path length so the in-memory entry is
     // well-formed, though the writer recomputes it. add_or_replace upserts by (path, stage 0).
-    fn add(&self, path: Vec<u8>, oid: ObjectId, mode: u32) {
+    // validate_index_path guards against leading-'/' SIGSEGV and worktree-escape via '..'.
+    fn add(&self, path: Vec<u8>, oid: ObjectId, mode: u32) -> PyResult<()> {
+        validate_index_path(&path)?;
         let entry = grit_lib::index::IndexEntry {
             ctime_sec: 0,
             ctime_nsec: 0,
@@ -151,13 +182,16 @@ impl Index {
             base_index_pos: 0,
         };
         self.inner.lock().unwrap().add_or_replace(entry);
+        Ok(())
     }
 
-    fn add_entry(&self, entry: PyRef<'_, IndexEntry>) {
+    fn add_entry(&self, entry: PyRef<'_, IndexEntry>) -> PyResult<()> {
+        validate_index_path(&entry.inner.path)?;
         self.inner
             .lock()
             .unwrap()
             .add_or_replace(entry.inner.clone());
+        Ok(())
     }
 
     fn remove(&self, path: Vec<u8>) -> bool {
@@ -180,13 +214,16 @@ impl Index {
     // the work_tree root; a bare repo (no work_tree) raises RepositoryError. Symlinks are staged
     // as their link target bytes (mode 120000), matching git. extract_path touches Python, so it
     // runs before any GIL release.
+    // validate_index_path is called BEFORE any filesystem access so stage(b"../x") is rejected
+    // before reading files outside the worktree.
     fn stage(&self, py: Python<'_>, path: &Bound<'_, PyAny>) -> PyResult<()> {
         let rel = crate::repository::extract_path(path)?;
+        let rel_bytes = path_to_bytes(&rel);
+        validate_index_path(&rel_bytes)?;
         let work_tree = self.repo.work_tree.clone().ok_or_else(|| {
             crate::error::invalid_ref("cannot stage a file in a bare repository (no work tree)")
         })?;
         let abs = work_tree.join(&rel);
-        let rel_bytes = path_to_bytes(&rel);
 
         let meta = std::fs::symlink_metadata(&abs).map_err(io_err)?;
         let mode = mode_from_metadata(&meta);
