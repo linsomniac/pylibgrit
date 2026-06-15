@@ -94,9 +94,11 @@ print(obj.kind, len(obj.data))       # obj.kind is an ObjectKind; obj.data is by
 - **CPython 3.11+** — wheels are `abi3-py311`, so a single wheel works on 3.11 and
   every newer 3.x. (Standard abi3 wheels do not target free-threaded / no-GIL
   CPython.)
-- **Linux/Unix** — x86_64 and aarch64.
-- **macOS** — best-effort (Apple-silicon aarch64). grit-lib is Unix-oriented and
-  its dependencies are pure-Rust, so it is expected to build.
+- **Linux (glibc)** — `manylinux_2_17` wheels for x86_64 and aarch64.
+- **Linux (musl)** — `musllinux_1_2` wheels for x86_64 and aarch64 (Alpine and other
+  musl-based distros / containers).
+- **macOS** — x86_64 (Intel) and arm64 (Apple silicon). grit-lib is Unix-oriented and
+  its dependencies are pure-Rust.
 - **Windows** — **deferred** until grit-lib gains Windows support (it currently
   depends on `libc`/`nix` and is Unix-oriented).
 
@@ -206,9 +208,9 @@ so no git-revision fallback is used).
 pygrit publishes to PyPI via [trusted publishing](https://docs.pypi.org/trusted-publishers/)
 (OpenID Connect) — no API tokens are stored in the repo. Publishing a GitHub Release
 runs [`.github/workflows/release.yml`](.github/workflows/release.yml), which rebuilds
-the wheels + sdist with the same build recipe CI uses (released Linux wheels target the
-broader `manylinux_2_17` tag), re-smoke-tests every artifact, checks the tag and
-provenance, and uploads to PyPI over OIDC.
+the wheels + sdist with the same build recipe CI uses (released glibc Linux wheels
+target the broader `manylinux_2_17` tag; musl wheels use `musllinux_1_2`), re-smoke-tests
+every artifact, checks the tag and provenance, and uploads to PyPI over OIDC.
 
 ### One-time setup (maintainer, manual)
 
@@ -244,7 +246,7 @@ These cannot be automated and must be done once before the first release:
 2. Commit to `main` and push.
 3. Create a GitHub Release with tag **`vX.Y.Z`** (final releases only — the version
    guard rejects anything that is not `vX.Y.Z`). Publishing the release builds and
-   smoke-tests the three wheels + sdist, verifies `tag == crate version` and that the
+   smoke-tests the six wheels + sdist, verifies `tag == crate version` and that the
    commit is on `main`, and publishes to PyPI automatically.
 
 ### TestPyPI dry-run (optional)

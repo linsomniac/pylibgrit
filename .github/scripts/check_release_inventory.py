@@ -2,13 +2,13 @@
 """Validate the release artifact set before publishing to PyPI.
 
 Asserts that a ``dist/`` directory contains exactly the artifacts the release
-workflow is expected to produce: three CPython ``abi3`` wheels (one per target
+workflow is expected to produce: six CPython ``abi3`` wheels (one per target
 platform) and one sdist, every file carrying the same project version. Any
 deviation -- a missing or extra artifact, a version disagreement, a non-abi3
 wheel -- is a hard error, so a malformed upload set can never reach PyPI.
 
-Because each target platform yields a uniquely named wheel, "exactly 3 wheels"
-already implies three distinct platforms; there is no separate platform-tag
+Because each target platform yields a uniquely named wheel, "exactly 6 wheels"
+already implies six distinct platforms; there is no separate platform-tag
 check (the exact tag strings shift with runner images and would be brittle).
 
 Usage: ``python check_release_inventory.py <dist-dir>``
@@ -20,7 +20,10 @@ import sys
 from pathlib import Path
 
 DIST_NAME = "pygrit"
-EXPECTED_WHEELS = 3
+# AIDEV-NOTE: EXPECTED_WHEELS must equal the number of build legs in the release
+# workflow's `build` matrix (.github/workflows/release.yml). Bump both together when
+# adding or removing a wheel target.
+EXPECTED_WHEELS = 6
 SDIST_SUFFIX = ".tar.gz"
 WHEEL_SUFFIX = ".whl"
 

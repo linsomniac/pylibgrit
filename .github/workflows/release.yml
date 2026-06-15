@@ -3,9 +3,11 @@
 # Separate from ci.yml so the OIDC `id-token: write` permission never lives in the
 # everyday push/PR workflow. Flow:
 #   version-guard  — (release only) tag must be vX.Y.Z and equal the crate version.
-#   build          — 3 targets (linux x86_64/aarch64, macOS arm64): build the abi3
-#                    wheel, assert exactly one cp311-abi3 wheel, import-smoke it
-#                    (native on x86_64/macOS; emulated arm64 via QEMU), upload.
+#   build          — 6 targets (linux glibc x86_64/aarch64, linux musl x86_64/aarch64,
+#                    macOS x86_64/arm64): build the abi3 wheel, assert exactly one
+#                    cp311-abi3 wheel, import-smoke it (native on glibc-x86_64 + macOS;
+#                    container on the glibc-aarch64 + musl-x86_64/aarch64 legs, arm64
+#                    via QEMU), upload.
 #   sdist          — build the sdist with the locked maturin, source-compile +
 #                    import-smoke it, upload.
 #   publish-pypi   — (release) provenance + inventory gate, then OIDC publish to PyPI.
@@ -61,7 +63,7 @@ jobs:
           echo "version-guard OK: $tag_version"
 
   build:
-    name: build (${{ matrix.os }} ${{ matrix.target }})
+    name: build (${{ matrix.os }} ${{ matrix.target }} ${{ matrix.manylinux }})
     needs: [version-guard]
     # version-guard is skipped on workflow_dispatch (its own `if`); allow build to
     # run when the guard either succeeded (release) or was skipped (dispatch), but
@@ -72,14 +74,39 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Linux glibc (manylinux_2_17 via "2014") — native + emulated-arm64 smoke.
           - os: ubuntu-latest
             target: x86_64
+            manylinux: "2014"
             smoke: native
           - os: ubuntu-latest
             target: aarch64
-            smoke: emulated
+            manylinux: "2014"
+            smoke: container
+            image: python:3.11-slim
+            platform: linux/arm64
+          # Linux musl (musllinux_1_2) — Alpine container smoke (arm64 via QEMU).
+          - os: ubuntu-latest
+            target: x86_64
+            manylinux: musllinux_1_2
+            smoke: container
+            image: python:3.11-alpine
+            platform: linux/amd64
+          - os: ubuntu-latest
+            target: aarch64
+            manylinux: musllinux_1_2
+            smoke: container
+            image: python:3.11-alpine
+            platform: linux/arm64
+          # macOS — native smoke. `manylinux: auto` is a no-op here (Linux-only); it is
+          # set only so every leg defines it (unique artifact names; no empty input).
+          - os: macos-13
+            target: x86_64
+            manylinux: auto
+            smoke: native
           - os: macos-14
             target: aarch64
+            manylinux: auto
             smoke: native
     steps:
       - uses: actions/checkout@v6
@@ -90,10 +117,11 @@ jobs:
         with:
           target: ${{ matrix.target }}
           args: --release --locked --out dist
-          # Pin manylinux_2_17 for the broadest-compatible Linux tag on RELEASED
-          # wheels (ci.yml uses `auto` = newer glibc, fine for dev — intentional
-          # divergence). Ignored on the macOS leg (manylinux is Linux-only).
-          manylinux: "2014"
+          # glibc legs pin manylinux_2_17 ("2014") for the broadest-compatible tag on
+          # RELEASED wheels; musl legs build musllinux_1_2; macOS passes `auto` (no-op).
+          # ci.yml uses `auto` for glibc (newer glibc, fine for dev — intentional
+          # divergence). Ignored on macOS (manylinux is Linux-only).
+          manylinux: ${{ matrix.manylinux }}
       - name: Verify exactly one cp311-abi3 wheel
         shell: bash
         run: |
@@ -122,20 +150,23 @@ jobs:
           /tmp/smoke/bin/python -c "import pygrit; pygrit.Repository"
           /tmp/smoke/bin/python -c "import pygrit, os; p=os.path.dirname(pygrit.__file__); assert 'site-packages' in p, p; print('imported from', p)"
       - name: Set up QEMU for emulated arm64 smoke
-        if: matrix.smoke == 'emulated'
+        if: matrix.smoke == 'container' && matrix.platform == 'linux/arm64'
         uses: docker/setup-qemu-action@v3
-      - name: Import smoke (emulated aarch64, Python 3.11 container)
-        if: matrix.smoke == 'emulated'
+      - name: Import smoke (container)
+        if: matrix.smoke == 'container'
         shell: bash
         run: |
           set -euxo pipefail
-          wheel="$(ls dist/*-cp311-abi3-*.whl)"
-          docker run --rm --platform linux/arm64 \
-            -v "$PWD/dist:/dist:ro" python:3.11-slim \
-            bash -c "pip install /dist/$(basename "$wheel") && python -c 'import pygrit; pygrit.Repository'"
+          # One step for all container legs: glibc-arm64 (slim) + musl x86_64/arm64
+          # (alpine). `sh -c` works in both slim (dash) and alpine (busybox sh).
+          shopt -s nullglob
+          wheel=(dist/*-cp311-abi3-*.whl)
+          docker run --rm --platform ${{ matrix.platform }} \
+            -v "$PWD/dist:/dist:ro" ${{ matrix.image }} \
+            sh -c "pip install /dist/${wheel[0]##*/} && python -c 'import pygrit; pygrit.Repository'"
       - uses: actions/upload-artifact@v7
         with:
-          name: wheels-${{ matrix.os }}-${{ matrix.target }}
+          name: wheels-${{ matrix.os }}-${{ matrix.target }}-${{ matrix.manylinux }}
           path: dist
           if-no-files-found: error
 
@@ -199,7 +230,7 @@ jobs:
           pattern: "*"
           merge-multiple: true
           path: dist
-      - name: Inventory — exactly 3 wheels + 1 sdist, single version
+      - name: Inventory — exactly 6 wheels + 1 sdist, single version
         shell: bash
         run: |
           set -euo pipefail
@@ -239,7 +270,7 @@ jobs:
           pattern: "*"
           merge-multiple: true
           path: dist
-      - name: Inventory — exactly 3 wheels + 1 sdist, single version
+      - name: Inventory — exactly 6 wheels + 1 sdist, single version
         shell: bash
         run: |
           set -euo pipefail
