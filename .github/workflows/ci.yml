@@ -21,9 +21,13 @@
 #     [dependency-groups] (PEP 735), installed via `uv sync --group dev`.
 #   * build-wheels also installs setup-uv: the sdist step shells out to
 #     `uvx maturin sdist`, so uv must be on PATH (harmless on legs that skip it).
-#   * macOS (macos-14 / Apple-silicon aarch64) is best-effort: grit-lib is
+#   * macOS (macos-14 arm64 + macos-13 x86_64) is best-effort: grit-lib is
 #     Unix-oriented and the deps are pure-Rust, so it is expected to build, but
 #     fail-fast is disabled so a macOS hiccup does not mask Linux results.
+#   * Wheel coverage mirrors most of release.yml's grid: linux glibc x86_64/aarch64,
+#     linux musl x86_64 (Alpine import-smoke only), macOS x86_64 + arm64. The emulated
+#     musl-aarch64 leg is release-only (kept off per-PR CI to avoid a second slow QEMU
+#     build).
 #   * aarch64 Linux wheels cross-build inside maturin-action's manylinux
 #     container (manylinux: auto) via emulation — no extra QEMU step is needed
 #     for the build, but that leg does not run the installed-wheel test suite or
@@ -83,7 +87,7 @@ jobs:
       - run: uv run python -m mypy.stubtest pygrit
 
   build-wheels:
-    name: build-wheels (${{ matrix.target }})
+    name: build-wheels (${{ matrix.os }} ${{ matrix.target }} ${{ matrix.manylinux }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -91,12 +95,24 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64
+            manylinux: auto
             smoke: true
           - os: ubuntu-latest
             target: aarch64
+            manylinux: auto
             smoke: false # cross-built under emulation; foreign interpreter not run here
+          - os: ubuntu-latest
+            target: x86_64
+            manylinux: musllinux_1_2
+            smoke: false
+            musl: true # import-smoke only in an Alpine container (native docker)
+          - os: macos-13
+            target: x86_64
+            manylinux: auto
+            smoke: true
           - os: macos-14
             target: aarch64
+            manylinux: auto
             smoke: true
     steps:
       - uses: actions/checkout@v6
@@ -108,7 +124,9 @@ jobs:
         with:
           target: ${{ matrix.target }}
           args: --release --locked --out dist
-          manylinux: auto
+          # glibc legs use `auto` (newer glibc, fine for dev — release.yml pins 2014);
+          # the musl leg builds musllinux_1_2; macOS ignores this (Linux-only).
+          manylinux: ${{ matrix.manylinux }}
       - name: list wheels
         run: ls -la dist
       - name: verify abi3 tag
@@ -136,8 +154,26 @@ jobs:
           /tmp/wheeltest/bin/python -c "import pygrit, os; p = os.path.dirname(pygrit.__file__); print('pygrit from:', p); assert 'site-packages' in p, p"
           /tmp/wheeltest/bin/python -m pytest tests/ -q
           /tmp/wheeltest/bin/python -m mypy.stubtest pygrit
+      - name: import-smoke the musl wheel (Alpine container)
+        if: matrix.musl
+        shell: bash
+        run: |
+          set -euxo pipefail
+          # The full pytest+stubtest suite runs on glibc x86_64 + both macOS legs; this
+          # leg just proves the wheel loads and links against musl libc. Native docker
+          # (x86_64 host) — no QEMU.
+          shopt -s nullglob
+          wheel=(dist/*-cp311-abi3-*.whl)
+          if [[ ${#wheel[@]} -ne 1 ]]; then
+            echo "::error::expected exactly one *-cp311-abi3-*.whl, found ${#wheel[@]}: ${wheel[*]:-<none>}"
+            ls -la dist || true
+            exit 1
+          fi
+          docker run --rm -v "$PWD/dist:/dist:ro" python:3.11-alpine \
+            sh -c "pip install /dist/${wheel[0]##*/} && python -c 'import pygrit; pygrit.Repository'"
       - name: build + install + smoke the sdist (fail hard)
-        if: matrix.os == 'ubuntu-latest' && matrix.target == 'x86_64'
+        # glibc x86_64 leg only — the musl x86_64 leg also matches os+target.
+        if: matrix.os == 'ubuntu-latest' && matrix.target == 'x86_64' && matrix.manylinux == 'auto'
         shell: bash
         run: |
           set -euxo pipefail
@@ -151,5 +187,5 @@ jobs:
           /tmp/sdisttest/bin/python -c "import pygrit; pygrit.Repository"
       - uses: actions/upload-artifact@v7
         with:
-          name: wheels-${{ matrix.os }}-${{ matrix.target }}
+          name: wheels-${{ matrix.os }}-${{ matrix.target }}-${{ matrix.manylinux }}
           path: dist
