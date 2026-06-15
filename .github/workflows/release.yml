@@ -42,6 +42,11 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@1.94.1
+        with:
+          # Pre-install rust-toolchain.toml's components: the cargo-metadata call
+          # below would otherwise trigger a flaky lazy rustup re-add of clippy
+          # (conflict on bin/cargo-clippy) and block the release.
+          components: rustfmt, clippy
       - name: Assert tag matches crate version
         shell: bash
         run: |
@@ -111,6 +116,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@1.94.1
+        with:
+          components: rustfmt, clippy
       - uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
@@ -178,6 +185,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@1.94.1
+        with:
+          components: rustfmt, clippy
       - uses: astral-sh/setup-uv@v8.2.0
       - run: uv sync --group dev
       # `uv run maturin` uses the maturin pinned in uv.lock (reproducible release
