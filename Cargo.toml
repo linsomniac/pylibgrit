@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 description = "Python bindings for grit-lib (a Rust reimplementation of Git)"
-repository = "https://github.com/linsomniac/pygrit"
-homepage = "https://github.com/linsomniac/pygrit"
-documentation = "https://github.com/linsomniac/pygrit"
+repository = "https://github.com/linsomniac/pylibgrit"
+homepage = "https://github.com/linsomniac/pylibgrit"
+documentation = "https://github.com/linsomniac/pylibgrit"
 publish = false
 
 [lib]

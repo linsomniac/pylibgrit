@@ -222,7 +222,7 @@ These cannot be automated and must be done once before the first release:
    <https://pypi.org/manage/account/publishing/>:
    - PyPI Project Name: `pylibgrit`
    - Owner: `linsomniac`
-   - Repository name: `pygrit`
+   - Repository name: `pylibgrit`
    - Workflow name: `release.yml`
    - Environment name: `pypi`
 
