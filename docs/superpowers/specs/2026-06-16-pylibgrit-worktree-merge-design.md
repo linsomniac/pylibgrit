@@ -252,7 +252,9 @@ The Phase A hierarchy (`GritError` → `RepositoryError`, `ObjectNotFoundError`,
   existing work-tree file would be overwritten and `force=False`.
 - **Lock contention** surfaces as `RepositoryError` (`cannot lock ref '<name>'`).
 - **Validation (binding-layer, pre-write).** Reuse the Phase A validators: `commit_index`
-  requires `author` XOR `author_raw` (committer likewise) and a non-empty `message`; ref
+  requires `author` XOR `author_raw` (committer likewise); the `message` is a required
+  keyword but may be empty (git-faithful — `git commit-tree -m ''` is accepted — and
+  consistent with `create_commit`, which does not enforce non-emptiness either). Ref
   names (`refs/tags/<name>`) pass `check_ref_format`; tag names and any reflog message reject
   NUL/CR/LF. `merge_trees`/`merge_commits` reject an unknown `favor` string with `ValueError`.
 - **`OSError`** — grit-lib `Error::Io` maps to `OSError` with errno, as in the read/write core.
