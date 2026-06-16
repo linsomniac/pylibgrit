@@ -260,7 +260,12 @@ pub(crate) fn atomic_cas_write(
     drop(file);
     match outcome {
         Ok(prev) => {
-            std::fs::rename(&lock, &path).map_err(CasError::Io)?;
+            // AIDEV-NOTE: A rename failure must NOT leave a stale `<ref>.lock` (the "never leave a
+            // stale lock on any error path" invariant): remove the lock before propagating.
+            if let Err(e) = std::fs::rename(&lock, &path) {
+                let _ = std::fs::remove_file(&lock);
+                return Err(CasError::Io(e));
+            }
             Ok(prev)
         }
         Err(e) => {

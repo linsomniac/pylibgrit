@@ -98,3 +98,15 @@ def test_cas_delete_loose(tmp_path):
     repo.delete_ref(b"refs/tags/v1", expected_old=c1)
     with pytest.raises(pylibgrit.GritError):
         repo.resolve("refs/tags/v1")
+
+
+# AIDEV-NOTE: The rename-failure cleanup in atomic_cas_write (a rename(lock -> ref) failure must
+# still remove the `<ref>.lock`) is covered by CODE INSPECTION, not a runtime test. Attempting to
+# force the rename to fail by making the ref PATH an (empty or non-empty) directory does NOT reach
+# the rename branch: grit's read_raw_ref classifies an existing directory at the ref path as a
+# present-but-unresolvable ref (NOT NotFound), so atomic_cas_write fails earlier in the VERIFY step
+# (current_under_lock -> resolve_ref -> "ref not found" -> RepositoryError). That verify-error path
+# has its own lock cleanup (also verified: no stale lock remains), but it is a DIFFERENT branch than
+# the rename fix. The lock and the rename target share a parent directory, so no portable filesystem
+# obstruction makes read_raw_ref report NotFound while rename still fails — hence the code fix is
+# locked in by inspection rather than a flaky/platform-specific test.
