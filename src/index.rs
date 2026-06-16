@@ -145,7 +145,7 @@ pub struct Index {
 }
 
 impl Index {
-    pub fn new_loaded(
+    pub(crate) fn new_loaded(
         inner: grit_lib::index::Index,
         repo: Arc<grit_lib::repo::Repository>,
     ) -> Self {

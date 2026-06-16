@@ -146,6 +146,9 @@ def test_merge_trees_conflict_reports_paths(tmp_path, git_env):
     assert res.has_conflicts is True
     assert b"c.txt" in res.conflicts
     assert res.conflict_blob(b"c.txt") is not None
+    marker_oid = res.conflict_blob(b"c.txt")
+    assert marker_oid is not None
+    assert b"<<<<<<<" in repo.blob(marker_oid).data  # marker blob is written + readable
     with pytest.raises(pylibgrit.RepositoryError):
         res.write_tree()
 
@@ -184,6 +187,42 @@ def test_merge_trees_favor_ours(tmp_path, git_env):
     t = repo.tree(tree)
     c_oid = next(e.id for e in t if e.name == b"c.txt")
     assert repo.blob(c_oid).data == b"ours\n"
+
+
+def test_merge_trees_favor_theirs(tmp_path, git_env):
+    import pylibgrit
+
+    work = tmp_path / "r"
+    subprocess.run(
+        ["git", "init", "-q", "-b", "main", str(work)], env=git_env, check=True
+    )
+    (work / "c.txt").write_text("base\n")
+    _git(work, git_env, "add", "-A")
+    _git(work, git_env, "commit", "-q", "-m", "base")
+    base_tree = _git(work, git_env, "rev-parse", "HEAD^{tree}")
+    base_commit = _git(work, git_env, "rev-parse", "HEAD")
+    (work / "c.txt").write_text("ours\n")
+    _git(work, git_env, "add", "-A")
+    _git(work, git_env, "commit", "-q", "-m", "A")
+    ours_tree = _git(work, git_env, "rev-parse", "HEAD^{tree}")
+    _git(work, git_env, "checkout", "-q", "-b", "feat", base_commit)
+    (work / "c.txt").write_text("theirs\n")
+    _git(work, git_env, "add", "-A")
+    _git(work, git_env, "commit", "-q", "-m", "B")
+    theirs_tree = _git(work, git_env, "rev-parse", "HEAD^{tree}")
+
+    repo = pylibgrit.Repository.open(str(work / ".git"))
+    res = repo.merge_trees(
+        pylibgrit.ObjectId.from_hex(base_tree),
+        pylibgrit.ObjectId.from_hex(ours_tree),
+        pylibgrit.ObjectId.from_hex(theirs_tree),
+        favor="theirs",
+    )
+    assert res.has_conflicts is False
+    tree = res.write_tree()
+    t = repo.tree(tree)
+    c_oid = next(e.id for e in t if e.name == b"c.txt")
+    assert repo.blob(c_oid).data == b"theirs\n"
 
 
 def test_merge_trees_bad_favor_raises(tmp_path, git_env):
