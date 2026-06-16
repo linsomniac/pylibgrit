@@ -271,6 +271,13 @@ class ConfigSet:
 @final
 class Repository:
     @staticmethod
+    def init(
+        path: str | bytes | os.PathLike[str],
+        *,
+        bare: bool = False,
+        initial_branch: bytes | None = None,
+    ) -> Repository: ...
+    @staticmethod
     def discover(path: str | bytes | os.PathLike[str]) -> Repository: ...
     @staticmethod
     def open(

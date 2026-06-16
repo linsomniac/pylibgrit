@@ -85,6 +85,36 @@ impl Repository {
         })
     }
 
+    // AIDEV-NOTE: Initialize (or reinitialize) a repository like `git init`. Wraps
+    // grit_lib::repo::init_repository with template_dir=None, ref_storage="files" (the default
+    // loose-ref backend; reftable is out of scope for Phase B). `initial_branch` becomes the
+    // symbolic HEAD target refs/heads/<branch>; we validate it as a ref so a bad name cannot
+    // corrupt HEAD. initial_branch=None defaults to "main" (matches our own default branch).
+    #[staticmethod]
+    #[pyo3(signature = (path, *, bare=false, initial_branch=None))]
+    fn init(
+        py: Python<'_>,
+        path: &Bound<'_, PyAny>,
+        bare: bool,
+        initial_branch: Option<Vec<u8>>,
+    ) -> PyResult<Self> {
+        let path = extract_path(path)?;
+        let branch = match initial_branch {
+            Some(b) => utf8_field("initial_branch", b)?,
+            None => "main".to_owned(),
+        };
+        // Validate the resulting branch ref name (refs/heads/<branch>) before init writes HEAD.
+        let mut full = b"refs/heads/".to_vec();
+        full.extend_from_slice(branch.as_bytes());
+        validate_ref_name(&full)?;
+        let repo = py
+            .allow_threads(|| grit_lib::repo::init_repository(&path, bare, &branch, None, "files"))
+            .map_err(map_err)?;
+        Ok(Self {
+            inner: Arc::new(repo),
+        })
+    }
+
     #[staticmethod]
     #[pyo3(signature = (git_dir, work_tree=None))]
     fn open(
