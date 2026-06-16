@@ -331,6 +331,9 @@ class Repository:
         *,
         favor: str | None = None,
     ) -> MergeResult: ...
+    def merge_commits(
+        self, ours: ObjectId, theirs: ObjectId, *, favor: str | None = None
+    ) -> MergeResult: ...
     def create_commit(
         self,
         tree: ObjectId,

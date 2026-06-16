@@ -235,3 +235,52 @@ def test_merge_trees_bad_favor_raises(tmp_path, git_env):
     )
     with pytest.raises(ValueError):
         repo.merge_trees(head_tree, head_tree, head_tree, favor="bogus")
+
+
+def test_merge_commits_clean_matches_git(tmp_path, git_env):
+    import pylibgrit
+
+    work, a, b, _base = _diamond(tmp_path / "r", git_env)
+    repo = pylibgrit.Repository.open(str(work / ".git"))
+    res = repo.merge_commits(
+        pylibgrit.ObjectId.from_hex(a), pylibgrit.ObjectId.from_hex(b)
+    )
+    assert res.has_conflicts is False
+    got = res.write_tree().hex
+    oracle = subprocess.run(
+        ["git", "merge-tree", "--write-tree", a, b],
+        cwd=work,
+        env=git_env,
+        stdout=subprocess.PIPE,
+    )
+    if oracle.returncode != 0:
+        pytest.skip("git merge-tree --write-tree unavailable (<2.38)")
+    assert got == oracle.stdout.decode().strip()
+
+
+def test_merge_commits_conflict(tmp_path, git_env):
+    import pylibgrit
+
+    work = tmp_path / "r"
+    subprocess.run(
+        ["git", "init", "-q", "-b", "main", str(work)], env=git_env, check=True
+    )
+    (work / "c.txt").write_text("base\n")
+    _git(work, git_env, "add", "-A")
+    _git(work, git_env, "commit", "-q", "-m", "base")
+    base = _git(work, git_env, "rev-parse", "HEAD")
+    (work / "c.txt").write_text("ours\n")
+    _git(work, git_env, "add", "-A")
+    _git(work, git_env, "commit", "-q", "-m", "A")
+    a = _git(work, git_env, "rev-parse", "HEAD")
+    _git(work, git_env, "checkout", "-q", "-b", "feat", base)
+    (work / "c.txt").write_text("theirs\n")
+    _git(work, git_env, "add", "-A")
+    _git(work, git_env, "commit", "-q", "-m", "B")
+    b = _git(work, git_env, "rev-parse", "HEAD")
+    repo = pylibgrit.Repository.open(str(work / ".git"))
+    res = repo.merge_commits(
+        pylibgrit.ObjectId.from_hex(a), pylibgrit.ObjectId.from_hex(b)
+    )
+    assert res.has_conflicts is True
+    assert b"c.txt" in res.conflicts

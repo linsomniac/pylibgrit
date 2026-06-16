@@ -759,6 +759,47 @@ impl Repository {
         crate::merge::MergeResult::from_output(py, Arc::clone(&self.inner), output)
     }
 
+    // AIDEV-NOTE: Commit-level three-way merge. base = first merge_base(ours, theirs); when the two
+    // are unrelated (no base), use the empty tree as base (additive merge, git's
+    // --allow-unrelated-histories behaviour). Returns a MergeResult exactly like merge_trees.
+    #[pyo3(signature = (ours, theirs, *, favor=None))]
+    fn merge_commits(
+        &self,
+        py: Python<'_>,
+        ours: &crate::objects::ObjectId,
+        theirs: &crate::objects::ObjectId,
+        favor: Option<&str>,
+    ) -> PyResult<crate::merge::MergeResult> {
+        let fav = crate::merge::parse_favor(favor)?;
+        let repo = Arc::clone(&self.inner);
+        let (oc, tc) = (ours.inner(), theirs.inner());
+        let output = py
+            .allow_threads(|| -> Result<_, grit_lib::error::Error> {
+                let bases = grit_lib::merge_base::merge_bases_all(&repo, &[oc, tc])?;
+                let base_tree = match bases.into_iter().next() {
+                    Some(base_commit) => crate::merge::tree_of_commit(&repo, base_commit)?,
+                    None => repo.odb.write(
+                        grit_lib::objects::ObjectKind::Tree,
+                        &grit_lib::objects::serialize_tree(&[]),
+                    )?,
+                };
+                let ours_tree = crate::merge::tree_of_commit(&repo, oc)?;
+                let theirs_tree = crate::merge::tree_of_commit(&repo, tc)?;
+                grit_lib::merge_trees::merge_trees_three_way(
+                    &repo,
+                    base_tree,
+                    ours_tree,
+                    theirs_tree,
+                    fav,
+                    grit_lib::merge_trees::WhitespaceMergeOptions::default(),
+                    None,
+                    grit_lib::merge_trees::TreeMergeConflictPresentation::default(),
+                )
+            })
+            .map_err(map_err)?;
+        crate::merge::MergeResult::from_output(py, Arc::clone(&self.inner), output)
+    }
+
     // AIDEV-NOTE: First merge base of two commits (== `git merge-base`), or None if unrelated.
     // Phase B uses the FIRST base only (no recursive/virtual base for criss-cross histories;
     // documented limitation). grit's merge_bases_all returns all bases; we take the first.

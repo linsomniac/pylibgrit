@@ -8,6 +8,17 @@ use pyo3::types::{PyBytes, PyList};
 
 use crate::objects::ObjectId;
 
+// AIDEV-NOTE: Resolve a commit oid to its tree oid (for commit-level merge). Errors (via map_err
+// at the call site) if the object is not a commit.
+pub(crate) fn tree_of_commit(
+    repo: &grit_lib::repo::Repository,
+    oid: grit_lib::objects::ObjectId,
+) -> Result<grit_lib::objects::ObjectId, grit_lib::error::Error> {
+    let obj = repo.odb.read(&oid)?;
+    let c = grit_lib::objects::parse_commit(&obj.data)?;
+    Ok(c.tree)
+}
+
 // AIDEV-NOTE: Map the public `favor` string to grit's MergeFavor. None => leave conflict markers
 // (default); "ours"/"theirs"/"union" auto-resolve. Anything else is a ValueError.
 pub(crate) fn parse_favor(favor: Option<&str>) -> PyResult<grit_lib::merge_file::MergeFavor> {
