@@ -728,6 +728,37 @@ impl Repository {
         Ok(crate::objects::ObjectId::from_inner(oid))
     }
 
+    // AIDEV-NOTE: Raw three-way tree merge (design §Merge). Produces a MergeResult (merged index +
+    // conflict report); touches no ref and no work tree. favor: None|"ours"|"theirs"|"union".
+    #[pyo3(signature = (base, ours, theirs, *, favor=None))]
+    fn merge_trees(
+        &self,
+        py: Python<'_>,
+        base: &crate::objects::ObjectId,
+        ours: &crate::objects::ObjectId,
+        theirs: &crate::objects::ObjectId,
+        favor: Option<&str>,
+    ) -> PyResult<crate::merge::MergeResult> {
+        let fav = crate::merge::parse_favor(favor)?;
+        let repo = Arc::clone(&self.inner);
+        let (b, o, t) = (base.inner(), ours.inner(), theirs.inner());
+        let output = py
+            .allow_threads(|| {
+                grit_lib::merge_trees::merge_trees_three_way(
+                    &repo,
+                    b,
+                    o,
+                    t,
+                    fav,
+                    grit_lib::merge_trees::WhitespaceMergeOptions::default(),
+                    None,
+                    grit_lib::merge_trees::TreeMergeConflictPresentation::default(),
+                )
+            })
+            .map_err(map_err)?;
+        crate::merge::MergeResult::from_output(py, Arc::clone(&self.inner), output)
+    }
+
     // AIDEV-NOTE: First merge base of two commits (== `git merge-base`), or None if unrelated.
     // Phase B uses the FIRST base only (no recursive/virtual base for criss-cross histories;
     // documented limitation). grit's merge_bases_all returns all bases; we take the first.

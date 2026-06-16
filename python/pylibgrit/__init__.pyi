@@ -22,6 +22,7 @@ __all__ = [
     "Index",
     "IndexEntry",
     "InvalidObjectError",
+    "MergeResult",
     "Object",
     "ObjectId",
     "ObjectKind",
@@ -155,6 +156,17 @@ class Index:
     def write_tree(self) -> ObjectId: ...
     def __len__(self) -> int: ...
     def __iter__(self) -> Iterator[IndexEntry]: ...
+
+@final
+class MergeResult:
+    @property
+    def index(self) -> Index: ...
+    @property
+    def has_conflicts(self) -> bool: ...
+    @property
+    def conflicts(self) -> list[bytes]: ...
+    def conflict_blob(self, path: bytes) -> ObjectId | None: ...
+    def write_tree(self) -> ObjectId: ...
 
 @final
 class Commit:
@@ -311,6 +323,14 @@ class Repository:
     ) -> Iterator[Commit]: ...
     def diff(self, a: ObjectId, b: ObjectId) -> Diff: ...
     def merge_base(self, a: ObjectId, b: ObjectId) -> ObjectId | None: ...
+    def merge_trees(
+        self,
+        base: ObjectId,
+        ours: ObjectId,
+        theirs: ObjectId,
+        *,
+        favor: str | None = None,
+    ) -> MergeResult: ...
     def create_commit(
         self,
         tree: ObjectId,

@@ -13,6 +13,7 @@ mod config;
 mod diff;
 mod error;
 mod index;
+mod merge;
 mod objects;
 mod odb;
 mod refs;
@@ -40,6 +41,7 @@ fn _pylibgrit(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<odb::Odb>()?;
     m.add_class::<refs::Reference>()?;
     m.add_class::<refs::ReferenceIter>()?;
+    m.add_class::<merge::MergeResult>()?;
     m.add_class::<repository::Repository>()?;
     m.add_class::<config::ConfigSet>()?;
     m.add_class::<diff::Diff>()?;

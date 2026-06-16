@@ -154,6 +154,17 @@ impl Index {
             repo,
         }
     }
+
+    // AIDEV-NOTE: True when the index holds any unmerged (conflict stage != 0) entry. Used by
+    // MergeResult.write_tree to refuse writing a tree from a conflicted merge.
+    pub(crate) fn has_unmerged(&self) -> bool {
+        self.inner
+            .lock()
+            .unwrap()
+            .entries
+            .iter()
+            .any(|e| e.stage() != 0)
+    }
 }
 
 #[pymethods]
@@ -202,7 +213,7 @@ impl Index {
     // (== `git write-tree`). prefix="" means the whole index from the root; writes the tree (and
     // any sub-trees) into the odb. Runs under the GIL — the MutexGuard is !Send so it cannot
     // cross allow_threads. (A future optimization could clone the Index to release the GIL.)
-    fn write_tree(&self) -> PyResult<ObjectId> {
+    pub(crate) fn write_tree(&self) -> PyResult<ObjectId> {
         let guard = self.inner.lock().unwrap();
         let oid = grit_lib::write_tree::write_tree_from_index(&self.repo.odb, &guard, "")
             .map_err(map_err)?;
