@@ -8,6 +8,7 @@
 
 use pyo3::prelude::*;
 
+mod checkout;
 mod config;
 mod diff;
 mod error;

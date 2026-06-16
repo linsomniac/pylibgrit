@@ -752,6 +752,20 @@ impl Repository {
         })
         .map_err(map_err)
     }
+
+    // AIDEV-NOTE: Non-destructive overlay checkout (design §Checkout safety). Writes the tree's
+    // blobs into the work tree, never deletes files absent from the tree, and refuses to overwrite
+    // an existing path unless force=True. update_index=True rebuilds matching index entries.
+    #[pyo3(signature = (tree, *, force=false, update_index=true))]
+    fn checkout_tree(
+        &self,
+        py: Python<'_>,
+        tree: &crate::objects::ObjectId,
+        force: bool,
+        update_index: bool,
+    ) -> PyResult<()> {
+        crate::checkout::checkout_tree_method(&self.inner, py, tree, force, update_index)
+    }
 }
 
 impl Repository {
