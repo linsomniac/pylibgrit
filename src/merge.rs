@@ -8,13 +8,23 @@ use pyo3::types::{PyBytes, PyList};
 
 use crate::objects::ObjectId;
 
-// AIDEV-NOTE: Resolve a commit oid to its tree oid (for commit-level merge). Errors (via map_err
-// at the call site) if the object is not a commit.
+// AIDEV-NOTE: Resolve a commit oid to its tree oid (for commit-level merge). We gate on the read
+// object's kind FIRST (like commit()/tree() in repository.rs) so a tag/blob oid cannot be silently
+// misparsed as a commit. The kind mismatch is a grit `Error::CorruptObject` (NOT a PyErr — this runs
+// inside the allow_threads closure); map_err sends that to InvalidObjectError, mirroring the
+// "object X is a Y, not a commit" InvalidObjectError raised by Repository::commit.
 pub(crate) fn tree_of_commit(
     repo: &grit_lib::repo::Repository,
     oid: grit_lib::objects::ObjectId,
 ) -> Result<grit_lib::objects::ObjectId, grit_lib::error::Error> {
     let obj = repo.odb.read(&oid)?;
+    if obj.kind != grit_lib::objects::ObjectKind::Commit {
+        return Err(grit_lib::error::Error::CorruptObject(format!(
+            "object {} is a {}, not a commit",
+            oid.to_hex(),
+            obj.kind
+        )));
+    }
     let c = grit_lib::objects::parse_commit(&obj.data)?;
     Ok(c.tree)
 }

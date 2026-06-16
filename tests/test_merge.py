@@ -284,3 +284,41 @@ def test_merge_commits_conflict(tmp_path, git_env):
     )
     assert res.has_conflicts is True
     assert b"c.txt" in res.conflicts
+
+
+def test_merge_commits_unrelated_uses_empty_base(tmp_path, git_env):
+    import pylibgrit
+
+    work = tmp_path / "r"
+    subprocess.run(
+        ["git", "init", "-q", "-b", "main", str(work)], env=git_env, check=True
+    )
+    (work / "x").write_text("x\n")
+    _git(work, git_env, "add", "-A")
+    _git(work, git_env, "commit", "-q", "-m", "one")
+    one = _git(work, git_env, "rev-parse", "HEAD")
+    _git(work, git_env, "checkout", "-q", "--orphan", "orphan")
+    (work / "y").write_text("y\n")
+    _git(work, git_env, "add", "-A")
+    _git(work, git_env, "commit", "-q", "-m", "two")
+    two = _git(work, git_env, "rev-parse", "HEAD")
+    repo = pylibgrit.Repository.open(str(work / ".git"))
+    # No common ancestor -> empty-tree base -> additive merge of disjoint files, no conflict.
+    res = repo.merge_commits(
+        pylibgrit.ObjectId.from_hex(one), pylibgrit.ObjectId.from_hex(two)
+    )
+    assert res.has_conflicts is False
+
+
+def test_merge_commits_non_commit_oid_raises(tmp_path, git_env):
+    import pylibgrit
+
+    work, a, b, _base = _diamond(tmp_path / "r", git_env)
+    repo = pylibgrit.Repository.open(str(work / ".git"))
+    tree_oid = pylibgrit.ObjectId.from_hex(
+        _git(work, git_env, "rev-parse", "HEAD^{tree}")
+    )
+    commit_oid = pylibgrit.ObjectId.from_hex(a)
+    # Passing a tree oid where a commit is expected must raise (not silently misparse).
+    with pytest.raises(pylibgrit.GritError):
+        repo.merge_commits(tree_oid, commit_oid)

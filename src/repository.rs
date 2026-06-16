@@ -772,10 +772,10 @@ impl Repository {
     ) -> PyResult<crate::merge::MergeResult> {
         let fav = crate::merge::parse_favor(favor)?;
         let repo = Arc::clone(&self.inner);
-        let (oc, tc) = (ours.inner(), theirs.inner());
+        let (o, t) = (ours.inner(), theirs.inner());
         let output = py
             .allow_threads(|| -> Result<_, grit_lib::error::Error> {
-                let bases = grit_lib::merge_base::merge_bases_all(&repo, &[oc, tc])?;
+                let bases = grit_lib::merge_base::merge_bases_all(&repo, &[o, t])?;
                 let base_tree = match bases.into_iter().next() {
                     Some(base_commit) => crate::merge::tree_of_commit(&repo, base_commit)?,
                     None => repo.odb.write(
@@ -783,8 +783,8 @@ impl Repository {
                         &grit_lib::objects::serialize_tree(&[]),
                     )?,
                 };
-                let ours_tree = crate::merge::tree_of_commit(&repo, oc)?;
-                let theirs_tree = crate::merge::tree_of_commit(&repo, tc)?;
+                let ours_tree = crate::merge::tree_of_commit(&repo, o)?;
+                let theirs_tree = crate::merge::tree_of_commit(&repo, t)?;
                 grit_lib::merge_trees::merge_trees_three_way(
                     &repo,
                     base_tree,
