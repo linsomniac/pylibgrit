@@ -334,6 +334,17 @@ class Repository:
     def merge_commits(
         self, ours: ObjectId, theirs: ObjectId, *, favor: str | None = None
     ) -> MergeResult: ...
+    def commit_index(
+        self,
+        *,
+        message: bytes,
+        parents: list[ObjectId] | None = None,
+        author: Signature | None = None,
+        committer: Signature | None = None,
+        author_raw: bytes | None = None,
+        committer_raw: bytes | None = None,
+        encoding: str | None = None,
+    ) -> ObjectId: ...
     def create_commit(
         self,
         tree: ObjectId,

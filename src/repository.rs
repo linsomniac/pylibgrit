@@ -835,6 +835,123 @@ impl Repository {
         .map_err(map_err)
     }
 
+    // AIDEV-NOTE: Commit-and-advance-branch porcelain (== `git commit`). Resolves HEAD's branch
+    // (must be symbolic — detached HEAD raises), writes a tree from the repo index, builds a commit
+    // whose FIRST parent is the current branch tip (none if the branch is unborn) plus any `parents=`
+    // extras (merge commits), writes it, atomically advances the branch (create-only if unborn, CAS
+    // on the tip otherwise), and appends a `commit:`/`commit (initial):` reflog entry with the
+    // committer identity. Identity rules match create_commit (Signature XOR *_raw).
+    #[pyo3(signature = (*, message, parents=None, author=None, committer=None,
+                        author_raw=None, committer_raw=None, encoding=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn commit_index(
+        &self,
+        py: Python<'_>,
+        message: Vec<u8>,
+        parents: Option<Vec<crate::objects::ObjectId>>,
+        author: Option<PyRef<'_, crate::objects::Signature>>,
+        committer: Option<PyRef<'_, crate::objects::Signature>>,
+        author_raw: Option<Vec<u8>>,
+        committer_raw: Option<Vec<u8>>,
+        encoding: Option<String>,
+    ) -> PyResult<crate::objects::ObjectId> {
+        let author_bytes = crate::objects::resolve_ident("author", author.as_deref(), author_raw)?;
+        let committer_bytes =
+            crate::objects::resolve_ident("committer", committer.as_deref(), committer_raw)?;
+        let git_dir = self.inner.git_dir.clone();
+        let repo = Arc::clone(&self.inner);
+
+        // Resolve HEAD -> branch (symbolic required).
+        let branch = py
+            .allow_threads(|| grit_lib::refs::read_head(&git_dir))
+            .map_err(map_err)?
+            .ok_or_else(|| {
+                crate::error::invalid_ref(
+                    "HEAD is detached; commit_index requires HEAD on a branch",
+                )
+            })?;
+
+        // Current branch tip (None if unborn).
+        let tip = py
+            .allow_threads(
+                || -> Result<Option<grit_lib::objects::ObjectId>, grit_lib::error::Error> {
+                    match grit_lib::refs::read_raw_ref(&git_dir, &branch)? {
+                        grit_lib::refs::RawRefLookup::NotFound => Ok(None),
+                        _ => grit_lib::refs::resolve_ref(&git_dir, &branch).map(Some),
+                    }
+                },
+            )
+            .map_err(map_err)?;
+
+        // Tree from the repo index.
+        let tree = py
+            .allow_threads(
+                || -> Result<grit_lib::objects::ObjectId, grit_lib::error::Error> {
+                    let index = repo.load_index()?;
+                    grit_lib::write_tree::write_tree_from_index(&repo.odb, &index, "")
+                },
+            )
+            .map_err(map_err)?;
+
+        // Parents: branch tip first (if any), then caller extras.
+        let mut parent_oids: Vec<grit_lib::objects::ObjectId> = Vec::new();
+        if let Some(t) = &tip {
+            parent_oids.push(*t);
+        }
+        if let Some(extra) = &parents {
+            parent_oids.extend(extra.iter().map(|p| p.inner()));
+        }
+
+        let cdata = grit_lib::objects::CommitData {
+            tree,
+            parents: parent_oids,
+            author: String::new(),
+            committer: String::new(),
+            author_raw: author_bytes,
+            committer_raw: committer_bytes.clone(),
+            encoding,
+            message: String::new(),
+            raw_message: Some(message.clone()),
+        };
+        let raw = grit_lib::objects::serialize_commit(&cdata);
+        let new_oid = py
+            .allow_threads(|| repo.odb.write(grit_lib::objects::ObjectKind::Commit, &raw))
+            .map_err(map_err)?;
+
+        // Atomically advance the branch: create-only if unborn, else CAS on the tip we read.
+        let exp = tip;
+        let create = exp.is_none();
+        py.allow_threads(|| {
+            crate::refs::atomic_cas_write(&git_dir, &branch, &new_oid, exp.as_ref(), create)
+        })
+        .map_err(crate::refs::cas_to_pyerr)?;
+
+        // Reflog: porcelain always logs (force_create). "commit (initial): <subject>" when unborn.
+        let subject = first_line(&message);
+        let prefix = if exp.is_none() {
+            "commit (initial): "
+        } else {
+            "commit: "
+        };
+        let log_msg = format!("{prefix}{subject}");
+        let ident = utf8_field("committer", committer_bytes)?;
+        let old_for_log = exp.unwrap_or_else(|| crate::refs::zero_like(&new_oid));
+        py.allow_threads(|| {
+            grit_lib::refs::append_reflog(
+                &git_dir,
+                &branch,
+                &old_for_log,
+                &new_oid,
+                &ident,
+                &log_msg,
+                true,
+            )
+        })
+        .map_err(map_err)?;
+
+        Ok(crate::objects::ObjectId::from_inner(new_oid))
+    }
+
     // AIDEV-NOTE: Non-destructive overlay checkout (design §Checkout safety). Writes the tree's
     // blobs into the work tree, never deletes files absent from the tree, and refuses to overwrite
     // an existing path unless force=True. update_index=True rebuilds matching index entries.
@@ -1028,6 +1145,13 @@ fn reflog_args(
             Ok(Some((ident, msg)))
         }
     }
+}
+
+// AIDEV-NOTE: First line of a commit message (the reflog subject). UTF-8-lossy and single-line by
+// construction (we cut at the first '\n'), so it is safe as a one-line reflog record.
+fn first_line(msg: &[u8]) -> String {
+    let end = msg.iter().position(|&b| b == b'\n').unwrap_or(msg.len());
+    String::from_utf8_lossy(&msg[..end]).into_owned()
 }
 
 // AIDEV-NOTE: grit-lib's TagData fields are `String`, so tag name/tagger/message must be UTF-8.
