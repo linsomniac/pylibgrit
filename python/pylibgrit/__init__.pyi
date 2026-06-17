@@ -339,6 +339,17 @@ class Repository:
         git_dir: str | bytes | os.PathLike[str],
         work_tree: str | bytes | os.PathLike[str] | None = ...,
     ) -> Repository: ...
+    @staticmethod
+    def clone(
+        url: str,
+        path: str | bytes | os.PathLike[str],
+        *,
+        branch: str | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        use_credential_helpers: bool = True,
+        progress: Callable[[bytes], None] | None = None,
+    ) -> Repository: ...
     @property
     def git_dir(self) -> bytes: ...
     @property

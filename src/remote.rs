@@ -7,7 +7,7 @@ use pyo3::types::PyBytes;
 
 use grit_lib::transfer::{FetchOptions, FetchOutcome, TagMode, UpdateMode};
 
-use crate::error::net_map_err;
+use crate::error::{net_map_err, network_err};
 use crate::net_progress::PyProgress;
 use crate::net_transport::{classify, git_connect, Scheme};
 
@@ -340,4 +340,105 @@ pub(crate) fn fetch_method(
         progress,
     )?;
     build_report(py, outcome)
+}
+
+// AIDEV-NOTE: Write the `[remote "origin"]` stanza into a freshly-init'd repo's .git/config (url +
+// the standard fetch refspec), so the result is a git-recognized clone. Uses grit's round-trip
+// ConfigFile editor (preserves existing entries). The config file exists post-init.
+fn write_origin_config(git_dir: &std::path::Path, url: &str) -> Result<(), grit_lib::error::Error> {
+    let path = git_dir.join("config");
+    let mut cf =
+        grit_lib::config::ConfigFile::from_path(&path, grit_lib::config::ConfigScope::Local)?
+            .ok_or_else(|| {
+                grit_lib::error::Error::Message(format!("config missing at {}", path.display()))
+            })?;
+    cf.set("remote.origin.url", url)?;
+    cf.set("remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*")?;
+    cf.write()?;
+    Ok(())
+}
+
+// AIDEV-NOTE: clone = init (non-bare) + origin config + fetch ALL heads & tags + materialize ONE
+// branch (explicit `branch=`, else the remote default) as refs/heads/<name> + HEAD + checkout.
+// Uses tags="all": git clone fetches all tags, AND it avoids a grit-lib 0.4.1 tags="following" bug
+// that drops a head's objects when a tag shares that head's oid (see spec §8). grit's fetch writes
+// the refs/remotes/origin/* tracking refs internally; we then create the local branch + HEAD and
+// check out (empty worktree ⇒ overlay == full checkout). Bare clone is deferred (spec §1).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn clone_impl(
+    py: Python<'_>,
+    url: String,
+    path: std::path::PathBuf,
+    branch: Option<String>,
+    username: Option<String>,
+    password: Option<String>,
+    use_credential_helpers: bool,
+    progress: Option<Py<PyAny>>,
+) -> PyResult<crate::repository::Repository> {
+    classify(&url)?; // fail fast on an unsupported scheme before touching the filesystem
+
+    // 1. init a non-bare repo.
+    let repo = py
+        .allow_threads(|| grit_lib::repo::init_repository(&path, false, "main", None, "files"))
+        .map_err(net_map_err)?;
+    let repo = std::sync::Arc::new(repo);
+    let git_dir = repo.git_dir.clone();
+    let work_tree = repo
+        .work_tree
+        .clone()
+        .ok_or_else(|| network_err("clone target has no work tree (internal error)"))?;
+
+    // 2. origin config.
+    py.allow_threads(|| write_origin_config(&git_dir, &url))
+        .map_err(net_map_err)?;
+
+    // 3. fetch all heads + tags into refs/remotes/origin/* (+ refs/tags/*). grit writes the refs.
+    let opts = build_fetch_options(None, "all", false)?;
+    let outcome = fetch_raw(
+        py,
+        &git_dir,
+        &url,
+        &opts,
+        username,
+        password,
+        use_credential_helpers,
+        progress,
+    )?;
+
+    // 4. resolve which branch to check out.
+    let name = match branch {
+        Some(b) => b.strip_prefix("refs/heads/").unwrap_or(&b).to_owned(),
+        None => {
+            let db = outcome.default_branch.as_deref().ok_or_else(|| {
+                network_err("remote did not advertise a default branch; pass branch=")
+            })?;
+            db.strip_prefix("refs/heads/").unwrap_or(db).to_owned()
+        }
+    };
+    let local_head = format!("refs/heads/{name}");
+    let tracking = format!("refs/remotes/origin/{name}");
+
+    // 5. create local branch = tracking oid; point HEAD at it.
+    let tip = py
+        .allow_threads(|| grit_lib::refs::resolve_ref(&git_dir, &tracking))
+        .map_err(|_| network_err(&format!("branch {name:?} not found on remote")))?;
+    py.allow_threads(|| grit_lib::refs::write_ref(&git_dir, &local_head, &tip))
+        .map_err(net_map_err)?;
+    py.allow_threads(|| grit_lib::refs::write_symbolic_ref(&git_dir, "HEAD", &local_head))
+        .map_err(net_map_err)?;
+
+    // 6. checkout the tip commit's tree (overlay == full checkout into the empty worktree).
+    let tree_oid = py
+        .allow_threads(
+            || -> Result<grit_lib::objects::ObjectId, grit_lib::error::Error> {
+                let obj = repo.odb.read(&tip)?;
+                let commit = grit_lib::objects::parse_commit(&obj.data)?;
+                Ok(commit.tree)
+            },
+        )
+        .map_err(net_map_err)?;
+    py.allow_threads(|| crate::checkout::checkout_tree(&repo, &work_tree, &tree_oid, false, true))
+        .map_err(crate::checkout::to_pyerr)?;
+
+    Ok(crate::repository::Repository { inner: repo })
 }

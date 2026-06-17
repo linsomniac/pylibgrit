@@ -117,6 +117,36 @@ impl Repository {
         })
     }
 
+    // AIDEV-NOTE: Clone `url` into `path` (== `git clone`, worktree only). Assembles init + origin
+    // config + fetch + branch/HEAD + checkout (grit has no clone porcelain). Uses tags="all" (git
+    // clone fetches all tags). bare/shallow deferred (spec §1). Returns the opened Repository.
+    #[staticmethod]
+    #[pyo3(signature = (url, path, *, branch=None, username=None, password=None,
+                        use_credential_helpers=true, progress=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn clone(
+        py: Python<'_>,
+        url: String,
+        path: &Bound<'_, PyAny>,
+        branch: Option<String>,
+        username: Option<String>,
+        password: Option<String>,
+        use_credential_helpers: bool,
+        progress: Option<Py<PyAny>>,
+    ) -> PyResult<Self> {
+        let path = extract_path(path)?;
+        crate::remote::clone_impl(
+            py,
+            url,
+            path,
+            branch,
+            username,
+            password,
+            use_credential_helpers,
+            progress,
+        )
+    }
+
     #[staticmethod]
     #[pyo3(signature = (git_dir, work_tree=None))]
     fn open(
