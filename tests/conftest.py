@@ -93,23 +93,28 @@ def _wait_port(host: str, port: int, proc: subprocess.Popen, timeout: float) -> 
 # place. `--export-all` serves repos under `--base-path` without a `git-daemon-export-ok` marker.
 # Yields the chosen port. Skips the test if the daemon never comes up (e.g. `git daemon` absent);
 # the pre-skip `proc.terminate()` is a benign no-op when the daemon already died.
+# `receive_pack=True` adds `--enable=receive-pack` so the daemon accepts push (git daemon refuses
+# receive-pack by default); used by the `git_daemon_push` fixture.
 @contextlib.contextmanager
-def _serve_git_daemon(base: Path, git_env: dict[str, str]) -> Iterator[int]:
+def _serve_git_daemon(
+    base: Path, git_env: dict[str, str], receive_pack: bool = False
+) -> Iterator[int]:
     port = _free_port()
+    args = [
+        "git",
+        "daemon",
+        "--reuseaddr",
+        "--listen=127.0.0.1",
+        f"--port={port}",
+        f"--base-path={base}",
+        "--export-all",
+    ]
+    if receive_pack:
+        # AIDEV-NOTE: git daemon refuses receive-pack (push) unless explicitly enabled.
+        args.append("--enable=receive-pack")
+    args.append(str(base))
     proc = subprocess.Popen(
-        [
-            "git",
-            "daemon",
-            "--reuseaddr",
-            "--listen=127.0.0.1",
-            f"--port={port}",
-            f"--base-path={base}",
-            "--export-all",
-            str(base),
-        ],
-        env=git_env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        args, env=git_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
     try:
         if not _wait_port("127.0.0.1", port, proc, timeout=5.0):
@@ -286,3 +291,38 @@ def http_auth_server(tmp_path: Path, git_env: dict[str, str]):
         yield ns
     finally:
         shutdown()
+
+
+# AIDEV-NOTE: A receive-pack-enabled git:// server (bare) plus a local non-bare clone (the pusher).
+# Push tests advance `local_path` (via the git oracle) and push to `repo_url`; the oracle for the
+# result is the bare server's refs (`run_git(server_path, "rev-parse", <ref>)`). The bare server is
+# safe to push any branch to (no checked-out worktree). `base_oid` is the server's initial main tip.
+@pytest.fixture
+def git_daemon_push(
+    tmp_path: Path, git_env: dict[str, str]
+) -> Iterator[SimpleNamespace]:
+    """git:// server with receive-pack enabled + a local clone to push from. Skips if no git daemon."""
+    base = tmp_path / "psrv"
+    base.mkdir()
+    src = tmp_path / "psrc"
+    src.mkdir()
+    _git(src, git_env, "init", "-q", "-b", "main")
+    (src / "a.txt").write_text("hello\n")
+    _git(src, git_env, "add", "-A")
+    _git(src, git_env, "commit", "-q", "-m", "c1")
+    server = base / "server.git"
+    _git(tmp_path, git_env, "clone", "-q", "--bare", str(src), str(server))
+    local = tmp_path / "plocal"
+    _git(tmp_path, git_env, "clone", "-q", str(server), str(local))
+    base_oid = (
+        run_git(server, "rev-parse", "refs/heads/main", env=git_env).decode().strip()
+    )
+
+    with _serve_git_daemon(base, git_env, receive_pack=True) as port:
+        yield SimpleNamespace(
+            repo_url=f"git://127.0.0.1:{port}/server.git",
+            server_path=server,
+            local_path=local,
+            base_oid=base_oid,
+            env=git_env,
+        )
