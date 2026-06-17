@@ -269,3 +269,20 @@ def http_server(tmp_path: Path, git_env: dict[str, str]):
         yield ns
     finally:
         shutdown()
+
+
+# AIDEV-NOTE: Authenticated variant of http_server using HTTP Basic auth (alice / s3cret). The
+# credentials are intentionally fixed/arbitrary test values — not secrets. The same
+# _make_http_server helper is reused; `auth=("alice", "s3cret")` makes the githttp handler require
+# Authorization: Basic and return 401 WWW-Authenticate for any other request. This fixture is the
+# target for Task 8 credential-path coverage (kwargs, URL userinfo, missing creds, wrong creds).
+@pytest.fixture
+def http_auth_server(tmp_path: Path, git_env: dict[str, str]):
+    """Basic-auth smart-HTTP server (user 'alice' / pass 's3cret'). Skips if unavailable."""
+    if not _git_http_backend_available(git_env):
+        pytest.skip("git http-backend unavailable")
+    ns, shutdown = _make_http_server(tmp_path, git_env, auth=("alice", "s3cret"))
+    try:
+        yield ns
+    finally:
+        shutdown()
