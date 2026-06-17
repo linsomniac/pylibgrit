@@ -3,6 +3,7 @@
 import enum
 
 from pylibgrit._pylibgrit import (
+    AuthenticationError,
     Blob,
     Commit,
     ConfigSet,
@@ -14,6 +15,7 @@ from pylibgrit._pylibgrit import (
     IndexEntry,
     InvalidObjectError,
     MergeResult,
+    NetworkError,
     Object,
     ObjectId,
     ObjectNotFoundError,
@@ -45,6 +47,7 @@ class ObjectKind(enum.IntEnum):
 
 
 __all__ = [
+    "AuthenticationError",
     "Blob",
     "Commit",
     "ConfigSet",
@@ -56,6 +59,7 @@ __all__ = [
     "IndexEntry",
     "InvalidObjectError",
     "MergeResult",
+    "NetworkError",
     "Object",
     "ObjectId",
     "ObjectKind",

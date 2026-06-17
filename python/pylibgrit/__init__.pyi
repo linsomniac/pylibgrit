@@ -12,6 +12,7 @@ import os
 from typing import Iterator, final
 
 __all__ = [
+    "AuthenticationError",
     "Blob",
     "Commit",
     "ConfigSet",
@@ -23,6 +24,7 @@ __all__ = [
     "IndexEntry",
     "InvalidObjectError",
     "MergeResult",
+    "NetworkError",
     "Object",
     "ObjectId",
     "ObjectKind",
@@ -54,6 +56,12 @@ class InvalidObjectError(GritError):
 
 class RefMismatchError(GritError):
     """Raised when a ref's current value fails a compare-and-swap / create-only check."""
+
+class NetworkError(GritError):
+    """Raised for transport/protocol/transfer failures talking to a remote."""
+
+class AuthenticationError(GritError):
+    """Raised when a remote rejects the supplied (or absent) credentials."""
 
 # --- Object kind ----------------------------------------------------------
 

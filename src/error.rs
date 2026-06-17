@@ -41,6 +41,18 @@ create_exception!(
     GritError,
     "A ref's current value did not match the expected value (compare-and-swap/create-only)."
 );
+create_exception!(
+    _pylibgrit,
+    NetworkError,
+    GritError,
+    "A transport, protocol, or transfer failure while talking to a remote."
+);
+create_exception!(
+    _pylibgrit,
+    AuthenticationError,
+    GritError,
+    "The remote rejected the supplied (or absent) credentials."
+);
 
 // AIDEV-NOTE: We CANNOT write `impl From<grit_lib::error::Error> for PyErr` — the
 // orphan rule forbids it because BOTH `grit_lib::error::Error` and `PyErr` are
@@ -84,8 +96,11 @@ pub fn map_err(e: grit_lib::error::Error) -> PyErr {
         // Bad path argument shape.
         Error::PathError(_) => PyValueError::new_err(msg),
 
-        // Everything else (index, cache-tree, signing, auth, push-options,
-        // generic message) plus any future `#[non_exhaustive]` variant.
+        // Remote authentication failure (HTTP 401, helper rejected, etc.).
+        Error::Auth(_) => AuthenticationError::new_err(msg),
+
+        // Everything else (index, cache-tree, signing, push-options, generic
+        // message) plus any future `#[non_exhaustive]` variant.
         _ => GritError::new_err(msg),
     }
 }
@@ -95,6 +110,29 @@ pub fn map_err(e: grit_lib::error::Error) -> PyErr {
 // `&str`-typed APIs). Maps to `RepositoryError`, the subclass for ref/repository faults.
 pub fn invalid_ref(msg: &str) -> PyErr {
     RepositoryError::new_err(msg.to_owned())
+}
+
+// AIDEV-NOTE: Network-context error mapping for the fetch/clone/ls_remote paths. grit's broad
+// `Error::Message` (transport/protocol failures) and transfer-time `Error::Io` (connection
+// refused, reset, …) become NetworkError; every other variant — including `Error::Auth` →
+// AuthenticationError — defers to `map_err`, so object/ref/repo faults keep their normal class.
+// Note: `Error::Io` here becomes NetworkError (NOT the errno-preserving PyOSError that `map_err`
+// produces) — the errno is intentionally dropped because transport-layer I/O errors in a network
+// context are better surfaced as NetworkError than as a raw OSError with an errno.
+#[allow(dead_code)]
+pub fn net_map_err(e: grit_lib::error::Error) -> PyErr {
+    use grit_lib::error::Error;
+    match e {
+        Error::Message(_) | Error::Io(_) => NetworkError::new_err(format!("{e}")),
+        other => map_err(other),
+    }
+}
+
+// AIDEV-NOTE: Construct a NetworkError directly from a binding-layer message (e.g. an
+// unsupported URL scheme) that does not originate from a `grit_lib::error::Error`.
+#[allow(dead_code)]
+pub fn network_err(msg: &str) -> PyErr {
+    NetworkError::new_err(msg.to_owned())
 }
 
 /// Registers the exception types on the native module.
@@ -110,5 +148,10 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.py().get_type::<InvalidObjectError>(),
     )?;
     m.add("RefMismatchError", m.py().get_type::<RefMismatchError>())?;
+    m.add("NetworkError", m.py().get_type::<NetworkError>())?;
+    m.add(
+        "AuthenticationError",
+        m.py().get_type::<AuthenticationError>(),
+    )?;
     Ok(())
 }
