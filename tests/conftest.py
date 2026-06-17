@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import socket
 import subprocess
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -84,33 +86,14 @@ def _wait_port(host: str, port: int, proc: subprocess.Popen, timeout: float) -> 
     return False
 
 
-@pytest.fixture
-def git_daemon(tmp_path: Path, git_env: dict[str, str]):
-    """Serve a seeded bare repo over git:// on localhost. Skips if `git daemon` is unavailable.
-
-    Yields a namespace with `repo_url`, `server_path` (the bare repo), and `head_oid`.
-    """
-    base = tmp_path / "srv"
-    base.mkdir()
-    # Seed a source repo, then make the served bare repo a clone of it.
-    src = tmp_path / "src"
-    src.mkdir()
-    _git(src, git_env, "init", "-q", "-b", "main")
-    (src / "a.txt").write_text("hello\n")
-    (src / "dir").mkdir()
-    (src / "dir" / "b.txt").write_text("world\n")
-    _git(src, git_env, "add", "-A")
-    _git(src, git_env, "commit", "-q", "-m", "initial commit")
-    _git(src, git_env, "tag", "v1")
-    server = base / "server.git"
-    _git(tmp_path, git_env, "clone", "-q", "--bare", str(src), str(server))
-    head_oid = run_git(src, "rev-parse", "HEAD", env=git_env).decode().strip()
-
+# AIDEV-NOTE: Launch a `git daemon` over `base` on a free port, wait for it to accept, and
+# guarantee teardown. Shared by the git:// fixtures so the Popen/wait/terminate dance lives in one
+# place. `--export-all` serves repos under `--base-path` without a `git-daemon-export-ok` marker.
+# Yields the chosen port. Skips the test if the daemon never comes up (e.g. `git daemon` absent);
+# the pre-skip `proc.terminate()` is a benign no-op when the daemon already died.
+@contextlib.contextmanager
+def _serve_git_daemon(base: Path, git_env: dict[str, str]) -> Iterator[int]:
     port = _free_port()
-    # AIDEV-NOTE: `--export-all` lets git-daemon serve repos under `--base-path`
-    # without requiring a `git-daemon-export-ok` marker file in each repo.
-    # On the skip path, `_wait_port` returns False when the daemon dies early, so
-    # `proc.terminate()` before `pytest.skip(...)` is a benign no-op on an already-dead process.
     proc = subprocess.Popen(
         [
             "git",
@@ -126,10 +109,52 @@ def git_daemon(tmp_path: Path, git_env: dict[str, str]):
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    if not _wait_port("127.0.0.1", port, proc, timeout=5.0):
-        proc.terminate()
-        pytest.skip("git daemon unavailable")
     try:
+        if not _wait_port("127.0.0.1", port, proc, timeout=5.0):
+            proc.terminate()
+            pytest.skip("git daemon unavailable")
+        yield port
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+@pytest.fixture
+def git_daemon(tmp_path: Path, git_env: dict[str, str]) -> Iterator[SimpleNamespace]:
+    """Serve a seeded bare repo over git:// on localhost. Skips if `git daemon` is unavailable.
+
+    Yields a namespace with `repo_url`, `server_path` (the bare repo), `src`, and `head_oid`.
+
+    AIDEV-NOTE: The `v1` tag is on a SEPARATE commit from `main`'s tip (commit1, "first"), NOT on the
+    tip — this is realistic AND avoids grit-lib 0.4.1's `tags="following"` shared-oid bug (a tag on
+    the head tip makes tag-following drop the head's objects; see the design spec §8 and the xfail in
+    test_fetch.py). `main`'s tip (commit2, "initial commit") therefore has a tree with BOTH a.txt and
+    dir/b.txt, which a later clone parity test depends on. `head_oid` is `main`'s tip (commit2).
+    """
+    base = tmp_path / "srv"
+    base.mkdir()
+    # Seed a source repo, then make the served bare repo a clone of it.
+    src = tmp_path / "src"
+    src.mkdir()
+    _git(src, git_env, "init", "-q", "-b", "main")
+    # commit1: a.txt only; tag v1 points HERE (not at main's tip).
+    (src / "a.txt").write_text("hello\n")
+    _git(src, git_env, "add", "-A")
+    _git(src, git_env, "commit", "-q", "-m", "first")
+    _git(src, git_env, "tag", "v1")
+    # commit2: add dir/b.txt (a.txt unchanged) -> this becomes main's tip / head_oid.
+    (src / "dir").mkdir()
+    (src / "dir" / "b.txt").write_text("world\n")
+    _git(src, git_env, "add", "-A")
+    _git(src, git_env, "commit", "-q", "-m", "initial commit")
+    server = base / "server.git"
+    _git(tmp_path, git_env, "clone", "-q", "--bare", str(src), str(server))
+    head_oid = run_git(src, "rev-parse", "HEAD", env=git_env).decode().strip()
+
+    with _serve_git_daemon(base, git_env) as port:
         yield SimpleNamespace(
             repo_url=f"git://127.0.0.1:{port}/server.git",
             server_path=server,
@@ -137,9 +162,37 @@ def git_daemon(tmp_path: Path, git_env: dict[str, str]):
             head_oid=head_oid,
             env=git_env,
         )
-    finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+
+
+@pytest.fixture
+def git_daemon_shared_tag(
+    tmp_path: Path, git_env: dict[str, str]
+) -> Iterator[SimpleNamespace]:
+    """Serve a repo where `v1` shares `main`'s tip oid — reproduces grit-lib's tag-following bug.
+
+    AIDEV-NOTE: Single commit (a.txt="hello\\n") tagged `v1`, so `v1` and `main` point at the SAME
+    oid. With the git-faithful default `tags="following"`, grit-lib 0.4.1's `add_wire_tags` poisons
+    the wants set for that shared oid and drops `main`'s objects (design spec §8). Exercised by the
+    strict-xfail `test_fetch_following_drops_head_sharing_tag_oid`. Skips if `git daemon` is absent.
+    """
+    base = tmp_path / "srv"
+    base.mkdir()
+    src = tmp_path / "src"
+    src.mkdir()
+    _git(src, git_env, "init", "-q", "-b", "main")
+    (src / "a.txt").write_text("hello\n")
+    _git(src, git_env, "add", "-A")
+    _git(src, git_env, "commit", "-q", "-m", "only commit")
+    _git(src, git_env, "tag", "v1")  # v1 -> main's tip (shared oid)
+    server = base / "server.git"
+    _git(tmp_path, git_env, "clone", "-q", "--bare", str(src), str(server))
+    head_oid = run_git(src, "rev-parse", "HEAD", env=git_env).decode().strip()
+
+    with _serve_git_daemon(base, git_env) as port:
+        yield SimpleNamespace(
+            repo_url=f"git://127.0.0.1:{port}/server.git",
+            server_path=server,
+            src=src,
+            head_oid=head_oid,
+            env=git_env,
+        )

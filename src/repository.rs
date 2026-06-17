@@ -969,6 +969,38 @@ impl Repository {
         crate::checkout::checkout_tree_method(&self.inner, py, tree, force, update_index)
     }
 
+    // AIDEV-NOTE: Fetch from `url` into this repo (== `git fetch`). Default refspec fetches all
+    // heads into refs/remotes/origin/*. git:// applies the returned ref updates here; https
+    // (http_fetch) self-applies. Optional progress= is a callable receiving side-band-2 bytes.
+    #[pyo3(signature = (url, refspecs=None, *, tags="following", prune=false,
+                        username=None, password=None, use_credential_helpers=true, progress=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn fetch(
+        &self,
+        py: Python<'_>,
+        url: String,
+        refspecs: Option<Vec<String>>,
+        tags: &str,
+        prune: bool,
+        username: Option<String>,
+        password: Option<String>,
+        use_credential_helpers: bool,
+        progress: Option<Py<PyAny>>,
+    ) -> PyResult<crate::remote::FetchReport> {
+        crate::remote::fetch_method(
+            py,
+            &self.inner,
+            url,
+            refspecs,
+            tags,
+            prune,
+            username,
+            password,
+            use_credential_helpers,
+            progress,
+        )
+    }
+
     // AIDEV-NOTE: Lightweight tag = a plain ref refs/tags/<name> -> target oid. Atomic create-only by
     // default (force=False); force=True overwrites (moves the tag). No tag object is created. Uses the
     // held-lock atomic_cas_write: create_only=!force gives create-only when force is false, and an

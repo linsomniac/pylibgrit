@@ -15,6 +15,7 @@ mod error;
 mod index;
 mod merge;
 mod net_credentials;
+mod net_progress;
 mod net_transport;
 mod objects;
 mod odb;
@@ -59,6 +60,8 @@ fn _pylibgrit(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // one via `repo.revwalk(start)`, never by constructing it directly.
     m.add_class::<revwalk::RevWalk>()?;
     m.add_class::<remote::RemoteRef>()?;
+    m.add_class::<remote::RefUpdate>()?;
+    m.add_class::<remote::FetchReport>()?;
     m.add_function(wrap_pyfunction!(remote::ls_remote, m)?)?;
     Ok(())
 }

@@ -9,7 +9,7 @@ the Rust source (src/*.rs) and `__init__.py`. Verified against the runtime with
 
 import enum
 import os
-from typing import Iterator, final
+from typing import Callable, Iterator, final
 
 __all__ = [
     "AuthenticationError",
@@ -19,6 +19,7 @@ __all__ = [
     "Diff",
     "DiffEntry",
     "DiffStats",
+    "FetchReport",
     "GritError",
     "Index",
     "IndexEntry",
@@ -32,6 +33,7 @@ __all__ = [
     "Odb",
     "Reference",
     "RefMismatchError",
+    "RefUpdate",
     "RemoteRef",
     "Repository",
     "RepositoryError",
@@ -235,6 +237,28 @@ class RemoteRef:
     @property
     def symref_target(self) -> bytes | None: ...
 
+@final
+class RefUpdate:
+    @property
+    def remote_ref(self) -> bytes: ...
+    @property
+    def local_ref(self) -> bytes | None: ...
+    @property
+    def old_oid(self) -> ObjectId | None: ...
+    @property
+    def new_oid(self) -> ObjectId | None: ...
+    @property
+    def mode(self) -> str: ...
+    @property
+    def note(self) -> str | None: ...
+
+@final
+class FetchReport:
+    @property
+    def updates(self) -> list[RefUpdate]: ...
+    @property
+    def default_branch(self) -> bytes | None: ...
+
 # --- Object database ------------------------------------------------------
 
 @final
@@ -434,6 +458,18 @@ class Repository:
     def checkout_tree(
         self, tree: ObjectId, *, force: bool = False, update_index: bool = True
     ) -> None: ...
+    def fetch(
+        self,
+        url: str,
+        refspecs: list[str] | None = None,
+        *,
+        tags: str = "following",
+        prune: bool = False,
+        username: str | None = None,
+        password: str | None = None,
+        use_credential_helpers: bool = True,
+        progress: Callable[[bytes], None] | None = None,
+    ) -> FetchReport: ...
 
 # --- Networking (read path) -----------------------------------------------
 

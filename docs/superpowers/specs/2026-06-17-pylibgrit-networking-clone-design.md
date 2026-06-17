@@ -126,9 +126,9 @@ designed for it, and both unify into one `FetchReport`.
   - `ls_remote`: `.connect(url, Service::UploadPack, ConnectOptions{ protocol_version: 1, .. })`,
     then read `conn.advertised_refs()` + `conn.head_symref()`. No objects transferred.
   - `fetch`: `.connect(url, UploadPack, ..)` → `grit_lib::fetch::fetch_remote(git_dir, &mut conn, &opts, progress)`.
-    **`fetch_remote` does not apply ref updates** — the binding writes each returned
-    `RefUpdate` whose mode is `New | FastForward | Forced` via the ref writer (matching what
-    `http_fetch` does internally), then optionally writes `FETCH_HEAD` (see §8).
+    Both `fetch_remote` (git://) and `http_fetch` (https) **write the New/FastForward/Forced tracking
+    refs and prune internally** (and unpack objects); the binding does NO ref application — it maps
+    the returned `FetchOutcome` to a `FetchReport` (`FETCH_HEAD` is not written; see §8).
 - **`https://…` / `http://…`** → build a `UreqHttpClient` (with credentials, §4).
   - `ls_remote`: `grit_lib::transport::http::SmartHttpTransport::new(client).connect(url, UploadPack, v1)`
     → read the advertisement as above.
@@ -267,13 +267,19 @@ Extends `tests/gitlib.py` + `tests/conftest.py`.
   `refs/tags/x^{}` row. Oracle comparisons strip `^{}` rows.
 - **Credential-helper side effects** (token `store` on success) are intentional and git-faithful.
 - No `insteadOf`/url-rewrite, no submodule/promisor handling.
+- **grit-lib `tags="following"` shared-oid bug:** when a tag points at the same commit as a fetched
+  head (e.g. tagging the branch tip), grit-lib 0.4.1's tag-following (`add_wire_tags` adds the shared
+  oid to the "following-only" set, which the wants filter then excludes) drops that head's objects.
+  `repo.fetch()` keeps the git-faithful `following` default and documents this; `clone()` uses
+  `tags="all"` (git clone fetches all tags anyway), which is unaffected. Workaround for `fetch`: pass
+  `tags="all"` or `tags="none"`. Captured by the strict-xfail `test_fetch_following_drops_head_sharing_tag_oid`.
 
 ---
 
 ## 9. Load-bearing references (grit-lib 0.4.1, verified)
 
-- `grit_lib::fetch::fetch_remote(local_git_dir: &Path, conn: &mut dyn Connection, opts: &FetchOptions, progress: &mut dyn Progress) -> Result<FetchOutcome>` — does **not** apply ref updates.
-- `grit_lib::transport::http::http_fetch(client: &dyn HttpClient, local_git_dir: &Path, repo_url: &str, opts: &FetchOptions, progress: &mut dyn Progress) -> Result<FetchOutcome>` — **self-applies** refs.
+- `grit_lib::fetch::fetch_remote(local_git_dir: &Path, conn: &mut dyn Connection, opts: &FetchOptions, progress: &mut dyn Progress) -> Result<FetchOutcome>` — **writes** the New/FastForward/Forced tracking refs and prunes internally (verified: fetch.rs:1327-1360), like `http_fetch`.
+- `grit_lib::transport::http::http_fetch(client: &dyn HttpClient, local_git_dir: &Path, repo_url: &str, opts: &FetchOptions, progress: &mut dyn Progress) -> Result<FetchOutcome>` — **writes** refs internally (same as `fetch_remote`).
 - `grit_lib::transport::{Transport, Connection, Service, ConnectOptions, GitDaemonTransport}`;
   `Connection::advertised_refs() -> &[(String, ObjectId)]`, `head_symref() -> Option<&str>`,
   `protocol_version() -> u8`.
