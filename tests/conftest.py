@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import socket
 import subprocess
+import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -12,6 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests import githttp
 from tests.gitlib import run_git
 
 DETERMINISTIC_DATE = "2005-04-07T22:13:13"
@@ -196,3 +198,74 @@ def git_daemon_shared_tag(
             head_oid=head_oid,
             env=git_env,
         )
+
+
+# AIDEV-NOTE: Seed a bare server repo and serve it over smart-HTTP via `tests.githttp` (a threaded
+# `git http-backend` bridge). Returns (namespace, shutdown) rather than a context manager so the same
+# lifecycle can back both the anonymous `http_server` fixture and (next task) an auth'd variant. The
+# server runs on a daemon thread on an ephemeral 127.0.0.1 port; callers MUST invoke the returned
+# `shutdown()` (it stops serve_forever, closes the socket, and joins the thread) to avoid leaking the
+# thread. `pytest.skip` if the listener cannot bind. `auth=None` means anonymous.
+def _make_http_server(
+    tmp_path: Path, git_env: dict[str, str], auth: tuple[str, str] | None
+):
+    """Seed a bare server repo and serve it over smart-HTTP. Returns (namespace, shutdown)."""
+    base = tmp_path / "httpsrv"
+    base.mkdir()
+    src = tmp_path / "httpsrc"
+    src.mkdir()
+    _git(src, git_env, "init", "-q", "-b", "main")
+    (src / "a.txt").write_text("hello\n")
+    _git(src, git_env, "add", "-A")
+    _git(src, git_env, "commit", "-q", "-m", "initial commit")
+    server = base / "server.git"
+    _git(tmp_path, git_env, "clone", "-q", "--bare", str(src), str(server))
+    head_oid = run_git(src, "rev-parse", "HEAD", env=git_env).decode().strip()
+
+    try:
+        httpd = githttp.serve(base, git_env, auth)
+    except OSError:
+        pytest.skip("could not start http server")
+    port = httpd.server_address[1]
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+
+    ns = SimpleNamespace(
+        repo_url=f"http://127.0.0.1:{port}/server.git",
+        head_oid=head_oid,
+        server_path=server,
+    )
+
+    def shutdown() -> None:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+    return ns, shutdown
+
+
+def _git_http_backend_available(git_env: dict[str, str]) -> bool:
+    """True if `git http-backend` can run here (it's part of git; missing only on odd installs)."""
+    try:
+        rc = subprocess.run(
+            ["git", "http-backend"],
+            env=git_env,
+            input=b"",
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode
+    except OSError:
+        return False
+    return rc in (0, 1, 2)  # runs (it errors without CGI env, but the binary exists)
+
+
+@pytest.fixture
+def http_server(tmp_path: Path, git_env: dict[str, str]):
+    """Anonymous smart-HTTP server (git http-backend). Skips if git http-backend is unavailable."""
+    if not _git_http_backend_available(git_env):
+        pytest.skip("git http-backend unavailable")
+    ns, shutdown = _make_http_server(tmp_path, git_env, auth=None)
+    try:
+        yield ns
+    finally:
+        shutdown()
