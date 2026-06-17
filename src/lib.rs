@@ -14,9 +14,12 @@ mod diff;
 mod error;
 mod index;
 mod merge;
+mod net_credentials;
+mod net_transport;
 mod objects;
 mod odb;
 mod refs;
+mod remote;
 mod repository;
 mod revwalk;
 
@@ -55,5 +58,7 @@ fn _pylibgrit(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // on the native module but NOT exported in python/pylibgrit/__init__.py's __all__. Users get
     // one via `repo.revwalk(start)`, never by constructing it directly.
     m.add_class::<revwalk::RevWalk>()?;
+    m.add_class::<remote::RemoteRef>()?;
+    m.add_function(wrap_pyfunction!(remote::ls_remote, m)?)?;
     Ok(())
 }

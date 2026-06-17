@@ -32,12 +32,14 @@ __all__ = [
     "Odb",
     "Reference",
     "RefMismatchError",
+    "RemoteRef",
     "Repository",
     "RepositoryError",
     "Signature",
     "Tag",
     "Tree",
     "TreeEntry",
+    "ls_remote",
 ]
 
 # --- Exceptions -----------------------------------------------------------
@@ -223,6 +225,15 @@ class Tag:
     def tagger(self) -> Signature | None: ...
     @property
     def message_bytes(self) -> bytes: ...
+
+@final
+class RemoteRef:
+    @property
+    def name(self) -> bytes: ...
+    @property
+    def oid(self) -> ObjectId: ...
+    @property
+    def symref_target(self) -> bytes | None: ...
 
 # --- Object database ------------------------------------------------------
 
@@ -423,3 +434,15 @@ class Repository:
     def checkout_tree(
         self, tree: ObjectId, *, force: bool = False, update_index: bool = True
     ) -> None: ...
+
+# --- Networking (read path) -----------------------------------------------
+
+def ls_remote(
+    url: str,
+    *,
+    username: str | None = None,
+    password: str | None = None,
+    use_credential_helpers: bool = True,
+    heads: bool = False,
+    tags: bool = False,
+) -> list[RemoteRef]: ...

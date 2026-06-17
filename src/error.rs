@@ -119,7 +119,6 @@ pub fn invalid_ref(msg: &str) -> PyErr {
 // Note: `Error::Io` here becomes NetworkError (NOT the errno-preserving PyOSError that `map_err`
 // produces) — the errno is intentionally dropped because transport-layer I/O errors in a network
 // context are better surfaced as NetworkError than as a raw OSError with an errno.
-#[allow(dead_code)]
 pub fn net_map_err(e: grit_lib::error::Error) -> PyErr {
     use grit_lib::error::Error;
     match e {
@@ -130,7 +129,6 @@ pub fn net_map_err(e: grit_lib::error::Error) -> PyErr {
 
 // AIDEV-NOTE: Construct a NetworkError directly from a binding-layer message (e.g. an
 // unsupported URL scheme) that does not originate from a `grit_lib::error::Error`.
-#[allow(dead_code)]
 pub fn network_err(msg: &str) -> PyErr {
     NetworkError::new_err(msg.to_owned())
 }

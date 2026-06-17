@@ -22,12 +22,14 @@ from pylibgrit._pylibgrit import (
     Odb,
     Reference,
     RefMismatchError,
+    RemoteRef,
     Repository,
     RepositoryError,
     Signature,
     Tag,
     Tree,
     TreeEntry,
+    ls_remote,
 )
 
 
@@ -67,10 +69,12 @@ __all__ = [
     "Odb",
     "Reference",
     "RefMismatchError",
+    "RemoteRef",
     "Repository",
     "RepositoryError",
     "Signature",
     "Tag",
     "Tree",
     "TreeEntry",
+    "ls_remote",
 ]
