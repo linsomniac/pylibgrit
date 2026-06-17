@@ -4,6 +4,44 @@ All notable changes to pylibgrit are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-06-17
+
+### Added
+
+- **Push over git:// and https** — `repo.push` sends refs to a remote in-process with no
+  external `git` binary or system C libraries, reusing the same bundled `http-ureq` /
+  rustls stack as fetch/clone.
+  - `repo.push(url, refspecs, *, force, atomic, dry_run, push_options, username, password,
+    use_credential_helpers, progress) -> PushReport` — full push surface.
+  - **refspecs**: a list of git-style **strings** (`"main"`, `"+a:b"` force,
+    `":refs/heads/old"` delete) and/or structured **`PushSpec`** objects. String source
+    refs use the source's fully-qualified ref as the destination (DWIM: `"main"` →
+    `refs/heads/main`); a bare object id with no explicit destination raises `ValueError`.
+  - `PushSpec(dst, *, src=None, force=False, delete=False, expected_old=None,
+    expect_absent=False)` — structured refspec with **force-with-lease** support
+    (`expected_old` / `expect_absent`): the push is accepted only if the remote ref
+    matches the expected value, returning `status="reject-stale"` otherwise.
+  - `atomic=True` — all-or-nothing push (server must support atomic pushes).
+  - `dry_run=True` — compute the push without writing to the remote.
+  - `push_options` — pass server-side `--push-option` strings.
+  - **Rejections are returned data, not exceptions:** non-fast-forward, hook-declined,
+    stale lease, etc. come back as `PushRefResult.status`; only transport/auth/protocol
+    failures raise (`NetworkError` / `AuthenticationError`).
+  - **Progress callback fires for push:** `progress: Callable[[bytes], None]` receives the
+    remote's side-band-2 output (`remote: …` hook/diagnostic lines). Unlike fetch (where
+    the callback never fires due to grit-lib's `no-progress` hard-code), push progress
+    does fire.
+  - New value objects: `PushSpec`, `PushRefResult` (`.local_ref`, `.remote_ref`,
+    `.old_oid`, `.new_oid`, `.forced`, `.deletion`, `.status`, `.message`), and
+    `PushReport` (`.results: list[PushRefResult]`, `.ok: bool`).
+
+### Known limitations
+
+- **Push is v1 only:** grit-lib 0.4.1 negotiates Git protocol v1 for push; server v2
+  advertisements are ignored. Transparent in practice (all public hosts support v1).
+- **Not yet supported:** SSH push (`ssh://` / `git@`), signed push (`--signed`), submodule
+  push, `insteadOf` URL rewriting.
+
 ## [0.3.0] - 2026-06-17
 
 ### Added
@@ -88,6 +126,7 @@ All notable changes to pylibgrit are documented here. The format is based on
   config — a thin Python façade over grit-lib 0.4.1, shipped as an `abi3` (CPython 3.11+)
   wheel with no external `git` binary or system C libraries required.
 
+[0.4.0]: https://github.com/linsomniac/pylibgrit/releases/tag/v0.4.0
 [0.3.0]: https://github.com/linsomniac/pylibgrit/releases/tag/v0.3.0
 [0.2.0]: https://github.com/linsomniac/pylibgrit/releases/tag/v0.2.0
 [0.1.0]: https://github.com/linsomniac/pylibgrit/releases/tag/v0.1.0

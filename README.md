@@ -8,10 +8,12 @@ from-scratch reimplementation of Git in Rust. pylibgrit is built with
 covering **reading** — discover/open repositories, read objects (commit/tree/blob/tag),
 list and resolve references, walk history, diff commits, and read config — a **local
 write surface** (since 0.2.0): write objects, stage an index, build trees, create
-commit/tag objects, and mutate refs — and **read-path networking** (since 0.3.0): clone,
-fetch, and list remote refs over git:// and https, with no system OpenSSL or libcurl
-required. Everything runs in-process, with no external `git` binary required at runtime
-and no system C libraries to build.
+commit/tag objects, and mutate refs — **read-path networking** (since 0.3.0): clone,
+fetch, and list remote refs over git:// and https — and **push** (since 0.4.0): push
+refs to a remote over git:// and https, with force, delete, atomic, dry-run, and
+force-with-lease (compare-and-swap) support. No system OpenSSL or libcurl required.
+Everything runs in-process, with no external `git` binary required at runtime and no
+system C libraries to build.
 
 ## Install / build from source
 
@@ -149,13 +151,14 @@ relative paths (no leading/trailing `/`, no `.`/`..` components); ref names are 
 git's ref-format rules; reflog messages and tag names reject NUL/CR/LF. These prevent object/
 record injection, path traversal, and a grit-lib stack-overflow on malformed index paths.
 
-## Networking (clone / fetch / ls-remote)
+## Networking (clone / fetch / ls-remote / push)
 
 Since **0.3.0**, pylibgrit exposes a **read-path networking surface** — clone from a
 remote, fetch into an existing repository, or list a remote's refs without cloning —
 over **git://** and **https** (the `http-ureq` / rustls stack is bundled by default; no
-system OpenSSL or libcurl required). Push, SSH transport, shallow/depth, bare/mirror
-clone, and submodules are not yet supported.
+system OpenSSL or libcurl required). Since **0.4.0**, `repo.push` is also available over
+the same transports. SSH transport, shallow/depth, bare/mirror clone, and submodules are
+not yet supported.
 
 ### Entry points
 
@@ -197,6 +200,21 @@ repo.fetch(
     password: str | None = None,
     use_credential_helpers: bool = True,
 ) -> FetchReport
+
+# Instance method — push refs to a remote (since 0.4.0).
+repo.push(
+    url: str,
+    refspecs: list[str | PushSpec],
+    *,
+    force: bool = False,
+    atomic: bool = False,
+    dry_run: bool = False,
+    push_options: list[str] | None = None,
+    username: str | None = None,
+    password: str | None = None,
+    use_credential_helpers: bool = True,
+    progress: Callable[[bytes], None] | None = None,
+) -> PushReport
 ```
 
 ### Value objects
@@ -206,6 +224,9 @@ repo.fetch(
 | `RemoteRef` | `.name: bytes`, `.oid: ObjectId`, `.symref_target: bytes \| None` |
 | `RefUpdate` | `.remote_ref: bytes`, `.local_ref: bytes \| None`, `.old_oid: ObjectId \| None`, `.new_oid: ObjectId \| None`, `.mode: str`, `.note: str \| None` |
 | `FetchReport` | `.updates: list[RefUpdate]`, `.default_branch: bytes \| None` |
+| `PushSpec` | `dst: bytes` (remote ref), `src: ObjectId \| None` (None ⇒ delete), `force: bool`, `delete: bool`, `expected_old: ObjectId \| None`, `expect_absent: bool` |
+| `PushRefResult` | `.local_ref: bytes \| None`, `.remote_ref: bytes`, `.old_oid: ObjectId \| None`, `.new_oid: ObjectId \| None`, `.forced: bool`, `.deletion: bool`, `.status: str`, `.message: str \| None` |
+| `PushReport` | `.results: list[PushRefResult]`, `.ok: bool` |
 
 ### Exceptions
 
@@ -223,12 +244,16 @@ Credentials are resolved in this order of precedence:
 
 ### Supported transports
 
-| Transport | Status |
+| Transport / feature | Status |
 | --- | --- |
-| `https://` | Supported (rustls bundled, no system OpenSSL) |
-| `git://` | Supported |
+| `https://` fetch/clone/ls-remote | Supported (rustls bundled, no system OpenSSL) |
+| `git://` fetch/clone/ls-remote | Supported |
+| `https://` push | Supported (since 0.4.0) |
+| `git://` push | Supported (since 0.4.0) |
 | `ssh://` / `git@` | Not yet supported |
-| Push / write | Not yet supported |
+| Signed push (`--signed`) | Not yet supported |
+| Submodule push | Not yet supported |
+| Push protocol v2 | Not yet supported (grit rejects v2 push; falls back to v1) |
 | Shallow / `--depth` | Not yet supported |
 | Bare / mirror clone | Not yet supported |
 
@@ -249,6 +274,86 @@ for ref in pylibgrit.ls_remote("https://github.com/octocat/Hello-World.git", hea
 report = repo.fetch("https://github.com/me/private.git", username="x", password="TOKEN")
 for u in report.updates:
     print(u.mode, u.remote_ref.decode())
+```
+
+### Pushing
+
+Since **0.4.0**, `repo.push` sends refs to a remote over **git://** or **https**.
+
+#### refspecs
+
+`refspecs` is a list that may contain:
+
+- **Strings** — git-style refspec shorthand:
+  - `"main"` → push `refs/heads/main` to `refs/heads/main` (the source's fully-qualified
+    ref is used as the destination); a tag `"v1.0"` → `refs/tags/v1.0` likewise.
+  - `"+a:b"` — force-push `a` to `b`.
+  - `":refs/heads/old"` — delete `refs/heads/old` on the remote.
+  - A bare object id with no explicit destination (e.g. `"abc123"`) raises `ValueError` —
+    use a `PushSpec` instead.
+- **`PushSpec` objects** — for full control:
+  `PushSpec(dst, *, src=None, force=False, delete=False, expected_old=None, expect_absent=False)`
+  - `dst: bytes` — the remote ref to update.
+  - `src: ObjectId | None` — the local object to push; `None` means delete.
+  - `force: bool` — force overwrite (no fast-forward check).
+  - `delete: bool` — delete the remote ref (equivalent to `src=None`).
+  - `expected_old: ObjectId | None` + `expect_absent: bool` — **force-with-lease** (safe
+    force / create-only): the push is accepted only if the remote ref currently points at
+    `expected_old` (or is absent when `expect_absent=True`); a stale ref returns
+    `status="reject-stale"`.
+
+#### Results — returned, not raised
+
+`repo.push` returns a `PushReport` (.`results: list[PushRefResult]`, `.ok: bool`).
+Rejections (non-fast-forward, hook-declined, stale lease, etc.) are **returned as data**
+in each `PushRefResult.status`, not raised as exceptions. `.ok` is `True` only when every
+ref in `results` has `status` of either `"ok"` or `"up-to-date"`.
+
+`PushRefResult.status` values:
+
+| Status | Meaning |
+| --- | --- |
+| `"ok"` | Ref updated successfully |
+| `"up-to-date"` | Remote already at the pushed value; no change |
+| `"reject-non-fast-forward"` | Not a fast-forward; use `force=True` or `PushSpec(force=True)` |
+| `"reject-already-exists"` | Remote ref exists and a create-only push was requested |
+| `"reject-fetch-first"` | Remote requires a fetch before pushing |
+| `"reject-needs-force"` | Remote requires an explicit force flag |
+| `"reject-stale"` | Force-with-lease failed: remote ref is not at `expected_old` |
+| `"remote-rejected"` | Remote hook or policy rejected the ref |
+| `"atomic-push-failed"` | This ref failed because another ref in an atomic push was rejected |
+
+Only transport/auth/protocol failures raise exceptions (`NetworkError` /
+`AuthenticationError`).
+
+#### Progress callback
+
+The `progress` callback (`Callable[[bytes], None]`) receives the remote's side-band-2
+output — the `remote: …` lines printed by server-side hooks and diagnostics. Unlike
+fetch (where the callback never fires), push progress **does** fire.
+
+#### Push example
+
+```python
+import pylibgrit
+
+repo = pylibgrit.Repository.open("/path/to/repo/.git", "/path/to/repo")
+
+# Push local 'main' over https (token via kwarg or https://<token>@host/...).
+report = repo.push("https://github.com/me/repo.git", ["main"], username="x", password="TOKEN")
+for r in report.results:
+    print(r.status, r.remote_ref.decode(), r.message or "")
+if not report.ok:
+    raise SystemExit("push rejected")
+
+# Force-with-lease (safe force) via a structured PushSpec:
+tip = repo.resolve("refs/heads/main")
+expected = repo.resolve("refs/remotes/origin/main")
+spec = pylibgrit.PushSpec(b"refs/heads/main", src=tip, expected_old=expected)
+repo.push("https://github.com/me/repo.git", [spec])
+
+# Delete a remote branch:
+repo.push("https://github.com/me/repo.git", [":refs/heads/old-feature"])
 ```
 
 ## Supported Python / platforms
@@ -327,14 +432,24 @@ This is honest about where grit-lib 0.4.1's API constrains byte-fidelity or beha
   compare-and-swap primitive, so `expected_old=`/`create=` do a read→compare→write without a
   held lock — they catch the common non-concurrent case but are not a hard guarantee against a
   concurrent writer. Atomic ref updates are planned for a later release.
-- **No transfer progress (grit-lib 0.4.1):** grit-lib hard-codes `no-progress` in its
-  fetch request, so there is no progress callback and one cannot be added at the binding
-  layer.
+- **No fetch transfer progress (grit-lib 0.4.1):** grit-lib hard-codes `no-progress` in
+  its fetch request, so there is no progress callback for fetch/clone and one cannot be
+  added at the binding layer. (Push progress — remote hook/diagnostic output — does fire.)
 - **`fetch(tags="following")` shared-oid quirk (grit-lib 0.4.1):** if a tag points at
-  the same commit as a fetched branch tip, grit-lib's tag-following can skip that
+  the same commit as a fetched branch tip, grit-lib 0.4.1's tag-following can skip that
   commit's objects; workaround: use `tags="all"` or `tags="none"`. `clone()` always uses
   `tags="all"` and is unaffected.
-- **Still out of scope (planned later phases):** working-tree checkout, push, SSH
+- **Push is v1 only (grit-lib 0.4.1):** grit-lib's push implementation uses Git protocol
+  v1; the server's v2 advertisement is ignored, and the client always negotiates v1. This
+  is transparent in practice (all public hosts support v1), but it means v2-specific push
+  features are unavailable.
+- **Push: no SSH, no signed push, no submodule push:** `repo.push` supports `git://` and
+  `https` only; `ssh://` / `git@` are not yet supported. Signed push (`--signed`) and
+  submodule-aware push are also not yet exposed.
+- **Push: string refspecs cannot express force-with-lease.** String shorthand (e.g. `"main"`,
+  `"+a:b"`) cannot encode a `expected_old` constraint. Use a `PushSpec` object for
+  force-with-lease.
+- **Still out of scope (planned later phases):** working-tree checkout, SSH
   transport, shallow/depth clone, bare/mirror clone, submodules, and `insteadOf` URL
   rewriting are not yet exposed.
 
@@ -391,6 +506,7 @@ so no git-revision fallback is used).
 
 | pylibgrit | grit-lib | pyo3 | Rust toolchain | Python (abi3) | License | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
+| 0.4.0 | `=0.4.1` (MIT) | `=0.23.3` | 1.94.1 | ≥ 3.11 | MIT | + push over git:// and https |
 | 0.3.0 | `=0.4.1` (MIT) | `=0.23.3` | 1.94.1 | ≥ 3.11 | MIT | + read-path networking |
 | 0.2.0 | `=0.4.1` (MIT) | `=0.23.3` | 1.94.1 | ≥ 3.11 | MIT | + local write-core |
 | 0.1.0 | `=0.4.1` (MIT) | `=0.23.3` | 1.94.1 | ≥ 3.11 | MIT | read-core release |
