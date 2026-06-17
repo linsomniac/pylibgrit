@@ -373,9 +373,11 @@ fn write_branch_upstream(
 // avoids a grit-lib 0.4.1 tags="following" bug that drops a head's objects when a tag shares that
 // head's oid (see spec §8). grit's fetch writes the refs/remotes/origin/* tracking refs internally;
 // we then create the local branch + HEAD and check out (empty worktree ⇒ overlay == full checkout).
-// ERROR MAPPING: only fetch_raw (step 3) is a network op; the local init/config/ref/odb steps use
-// map_err (GritError/PyOSError) so a local failure is not mis-surfaced as NetworkError. Bare/shallow
-// clone are deferred (spec §1). LIMITATION: clone into a non-empty existing path RE-INITS over it
+// ERROR MAPPING: the local init/config/ref-write/odb steps use map_err (GritError/PyOSError) so a
+// local failure is not mis-surfaced as NetworkError; the one EXCEPTION is step 5's tracking-ref
+// resolve, which maps any failure to NetworkError("branch not found on remote") — correct for the
+// realistic post-fetch case, where the only failure is the branch genuinely not being on the remote.
+// Bare/shallow clone are deferred (spec §1). LIMITATION: clone into a non-empty existing path RE-INITS over it
 // (init_repository has no already-exists guard) rather than refusing like `git clone` — deferred.
 pub(crate) fn clone_impl(
     py: Python<'_>,

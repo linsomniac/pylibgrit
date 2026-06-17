@@ -290,6 +290,7 @@ GritError                 (base — also the catch-all for unmapped grit-lib err
 ├── RepositoryError       open/discover/format-validation/ref failures
 ├── ObjectNotFoundError   a requested object is not in the object database
 ├── InvalidObjectError    an object is corrupt or cannot be parsed
+├── RefMismatchError      a ref's value failed a compare-and-swap / create-only check
 ├── NetworkError          a network-level failure during fetch/clone/ls-remote
 └── AuthenticationError   authentication failed or credentials were rejected
 ```
