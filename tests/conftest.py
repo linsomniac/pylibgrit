@@ -211,8 +211,13 @@ def git_daemon_shared_tag(
 # server runs on a daemon thread on an ephemeral 127.0.0.1 port; callers MUST invoke the returned
 # `shutdown()` (it stops serve_forever, closes the socket, and joins the thread) to avoid leaking the
 # thread. `pytest.skip` if the listener cannot bind. `auth=None` means anonymous.
+# `receive_pack=True` sets `http.receivepack=true` on the bare repo so git http-backend serves
+# git-receive-pack (push); fetch/clone work without it but push requires this opt-in.
 def _make_http_server(
-    tmp_path: Path, git_env: dict[str, str], auth: tuple[str, str] | None
+    tmp_path: Path,
+    git_env: dict[str, str],
+    auth: tuple[str, str] | None,
+    receive_pack: bool = False,
 ):
     """Seed a bare server repo and serve it over smart-HTTP. Returns (namespace, shutdown)."""
     base = tmp_path / "httpsrv"
@@ -225,6 +230,9 @@ def _make_http_server(
     _git(src, git_env, "commit", "-q", "-m", "initial commit")
     server = base / "server.git"
     _git(tmp_path, git_env, "clone", "-q", "--bare", str(src), str(server))
+    if receive_pack:
+        # AIDEV-NOTE: git http-backend serves git-receive-pack (push) only when the repo opts in.
+        _git(server, git_env, "config", "http.receivepack", "true")
     head_oid = run_git(src, "rev-parse", "HEAD", env=git_env).decode().strip()
 
     try:
@@ -239,6 +247,7 @@ def _make_http_server(
         repo_url=f"http://127.0.0.1:{port}/server.git",
         head_oid=head_oid,
         server_path=server,
+        env=git_env,
     )
 
     def shutdown() -> None:
@@ -326,3 +335,22 @@ def git_daemon_push(
             base_oid=base_oid,
             env=git_env,
         )
+
+
+# AIDEV-NOTE: Anonymous smart-HTTP server with receive-pack ENABLED (http.receivepack=true) plus a
+# local non-bare clone (the pusher). Skips if git http-backend is unavailable; tears down the thread.
+@pytest.fixture
+def http_push_server(
+    tmp_path: Path, git_env: dict[str, str]
+) -> Iterator[SimpleNamespace]:
+    """Anonymous receive-pack smart-HTTP server + a local clone to push from."""
+    if not _git_http_backend_available(git_env):
+        pytest.skip("git http-backend unavailable")
+    ns, shutdown = _make_http_server(tmp_path, git_env, auth=None, receive_pack=True)
+    local = tmp_path / "httppushlocal"
+    _git(tmp_path, git_env, "clone", "-q", str(ns.server_path), str(local))
+    ns.local_path = local
+    try:
+        yield ns
+    finally:
+        shutdown()
