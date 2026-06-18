@@ -1,15 +1,19 @@
 //! URL-scheme dispatch for the read-path network surface: classify a remote URL and connect git://.
 
-use grit_lib::transport::{ConnectOptions, Connection, GitDaemonTransport, Service, Transport};
+use grit_lib::transport::{
+    is_ssh_url, ConnectOptions, Connection, GitDaemonTransport, Service, SshTransport, Transport,
+};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use crate::error::network_err;
 
-// AIDEV-NOTE: Supported read-path schemes. ssh, file://, and scp-like `git@host:path` are out of
-// scope (spec §1) and are reported as a clear NetworkError rather than a deep transport failure.
+// AIDEV-NOTE: Supported read-path schemes. file:// and ext:: are out of scope and are reported as a
+// clear NetworkError rather than a deep transport failure.
 pub(crate) enum Scheme {
     Git,
     Http,
+    Ssh,
 }
 
 pub(crate) fn classify(url: &str) -> PyResult<Scheme> {
@@ -17,9 +21,12 @@ pub(crate) fn classify(url: &str) -> PyResult<Scheme> {
         Ok(Scheme::Git)
     } else if url.starts_with("https://") || url.starts_with("http://") {
         Ok(Scheme::Http)
+    } else if is_ssh_url(url) {
+        Ok(Scheme::Ssh)
     } else {
         Err(network_err(&format!(
-            "unsupported transport for URL {url:?}; supported schemes: git://, http://, https://"
+            "unsupported transport for URL {url:?}; supported schemes: git://, http://, https://, \
+             ssh:// (and scp-style host:path)"
         )))
     }
 }
@@ -92,4 +99,46 @@ pub(crate) fn git_connect_receive(
         server_options: Vec::new(),
     };
     GitDaemonTransport::new().connect(url, Service::ReceivePack, &opts)
+}
+
+// AIDEV-NOTE: Build the ssh transport. `Some(cmd)` pins a shell command line (run via `sh -c`, like
+// GIT_SSH_COMMAND); `None` is Auto — grit resolves $GIT_SSH_COMMAND, then $GIT_SSH, then `ssh`.
+fn build_ssh_transport(ssh_command: Option<&str>) -> SshTransport {
+    match ssh_command {
+        Some(cmd) => SshTransport::with_shell_command(cmd),
+        None => SshTransport::new(),
+    }
+}
+
+// AIDEV-NOTE: Connect an ssh service (git-upload-pack) for ls_remote/fetch. `protocol_version` 1 for
+// ls_remote (read a v0/v1 advertisement); 0 for fetch (let the server pick). The returned
+// `Box<dyn Connection>` wraps a child process — it is `!Send`, so construct + consume it inside one
+// `allow_threads` closure (never cross the boundary), exactly like `git_connect`.
+pub(crate) fn ssh_connect(
+    url: &str,
+    protocol_version: u8,
+    ssh_command: Option<&str>,
+) -> Result<Box<dyn Connection>, grit_lib::error::Error> {
+    let opts = ConnectOptions {
+        protocol_version,
+        server_options: Vec::new(),
+    };
+    build_ssh_transport(ssh_command).connect(url, Service::UploadPack, &opts)
+}
+
+// AIDEV-NOTE: ssh auth (keys/agent/known_hosts) is the ssh subprocess's job, never pylibgrit's. The
+// http-only `username`/`password` kwargs do not apply to ssh URLs; passing either with an ssh URL is
+// almost certainly a mistake, so fail loud. `use_credential_helpers` (http-only) is left alone.
+pub(crate) fn reject_creds_for_ssh(
+    url: &str,
+    username: &Option<String>,
+    password: &Option<String>,
+) -> PyResult<()> {
+    if (username.is_some() || password.is_some()) && is_ssh_url(url) {
+        return Err(PyValueError::new_err(
+            "username/password are not used for ssh URLs; ssh authentication is handled by the ssh \
+             program (keys/agent). Put the user in the URL, e.g. ssh://user@host/path.",
+        ));
+    }
+    Ok(())
 }

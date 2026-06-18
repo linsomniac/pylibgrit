@@ -8,7 +8,7 @@ use pyo3::types::PyBytes;
 use grit_lib::transfer::{FetchOptions, FetchOutcome, TagMode, UpdateMode};
 
 use crate::error::{map_err, net_map_err, network_err};
-use crate::net_transport::{classify, git_connect, Scheme};
+use crate::net_transport::{classify, git_connect, reject_creds_for_ssh, ssh_connect, Scheme};
 
 // AIDEV-NOTE: One advertised remote ref. `name`/`symref_target` are bytes (house style: ref names
 // are bytes everywhere in the binding); `oid` is an ObjectId. HEAD is synthesized from the
@@ -57,12 +57,24 @@ fn read_advertisement(
     Ok((refs, head))
 }
 
+#[allow(clippy::type_complexity)]
+fn read_advertisement_ssh(
+    url: &str,
+    ssh_command: Option<&str>,
+) -> Result<(Vec<(String, grit_lib::objects::ObjectId)>, Option<String>), grit_lib::error::Error> {
+    let conn = ssh_connect(url, 1, ssh_command)?;
+    let refs = conn.advertised_refs().to_vec();
+    let head = conn.head_symref().map(str::to_owned);
+    Ok((refs, head))
+}
+
 // AIDEV-NOTE: List remote refs (== `git ls-remote`), built from the connection advertisement (grit's
 // `ls_remote` is local-only). `heads`/`tags` restrict to those namespaces and drop the synthesized
 // HEAD row (matching `git ls-remote --heads/--tags`). Peeled `^{}` rows are not surfaced (grit's
 // advertised_refs omits them) — a documented limitation.
 #[pyfunction]
-#[pyo3(signature = (url, *, username=None, password=None, use_credential_helpers=true, heads=false, tags=false))]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (url, *, username=None, password=None, use_credential_helpers=true, heads=false, tags=false, ssh_command=None))]
 pub fn ls_remote(
     py: Python<'_>,
     url: String,
@@ -71,7 +83,9 @@ pub fn ls_remote(
     use_credential_helpers: bool,
     heads: bool,
     tags: bool,
+    ssh_command: Option<String>,
 ) -> PyResult<Vec<RemoteRef>> {
+    reject_creds_for_ssh(&url, &username, &password)?;
     let (advertised, head_target) = match classify(&url)? {
         Scheme::Git => py
             .allow_threads(|| read_advertisement(&url))
@@ -83,6 +97,9 @@ pub fn ls_remote(
             password,
             use_credential_helpers,
         )?,
+        Scheme::Ssh => py
+            .allow_threads(|| read_advertisement_ssh(&url, ssh_command.as_deref()))
+            .map_err(net_map_err)?,
     };
 
     let mut out: Vec<RemoteRef> = Vec::new();
@@ -237,6 +254,14 @@ pub(crate) fn fetch_raw(
                 grit_lib::transport::http::http_fetch(&client, git_dir, &clean_url, opts, &mut np)
             })
             .map_err(net_map_err)?
+        }
+        Scheme::Ssh => {
+            // AIDEV-TODO: When ssh fetch lands (Task 2), call reject_creds_for_ssh at the fetch
+            // entry points (fetch_method + clone_impl, before init) so username/password are
+            // rejected for ssh URLs.
+            return Err(net_map_err(grit_lib::error::Error::Message(
+                "ssh fetch is not yet implemented in this build".to_owned(),
+            )));
         }
     };
     Ok(outcome)

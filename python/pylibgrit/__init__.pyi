@@ -558,4 +558,5 @@ def ls_remote(
     use_credential_helpers: bool = True,
     heads: bool = False,
     tags: bool = False,
+    ssh_command: str | None = None,
 ) -> list[RemoteRef]: ...

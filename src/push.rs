@@ -378,6 +378,13 @@ pub(crate) fn push_method(
             }
             result.map_err(net_map_err)?
         }
+        Scheme::Ssh => {
+            // AIDEV-TODO: When ssh push lands (Task 3), call reject_creds_for_ssh first in
+            // push_method so username/password are rejected for ssh URLs.
+            return Err(net_map_err(grit_lib::error::Error::Message(
+                "ssh push is not yet implemented in this build".to_owned(),
+            )));
+        }
     };
     build_push_report(py, outcome)
 }

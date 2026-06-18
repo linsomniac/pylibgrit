@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import socket
+import stat
 import subprocess
 import threading
 import time
@@ -379,3 +380,53 @@ def http_auth_push_server(
         yield ns
     finally:
         shutdown()
+
+
+# AIDEV-NOTE: A hermetic "ssh" server. No real sshd: `ssh_command` is a POSIX shim that ignores the
+# host/-p args grit passes and runs the remote git command (the LAST argument, e.g.
+# `git-upload-pack '/abs/repo.git'` or `git-receive-pack '...'`) locally against the bare repo. The
+# shim prepends `git --exec-path` to PATH so the dashed git-upload-pack/git-receive-pack helpers
+# resolve regardless of the ambient PATH. Bare server (safe to push to) + a local non-bare pusher
+# clone, mirroring `git_daemon_push`. `repo_url` is an ssh:// URL with an absolute path; `scp_url` is
+# the scp-style form of the same repo.
+@pytest.fixture
+def ssh_server(tmp_path: Path, git_env: dict[str, str]) -> SimpleNamespace:
+    """Fake-ssh (shim) server: bare receive-pack-capable repo + a local clone to push from."""
+    base = tmp_path / "sshsrv"
+    base.mkdir()
+    src = tmp_path / "sshsrc"
+    src.mkdir()
+    _git(src, git_env, "init", "-q", "-b", "main")
+    (src / "a.txt").write_text("hello\n")
+    _git(src, git_env, "add", "-A")
+    _git(src, git_env, "commit", "-q", "-m", "c1")
+    server = base / "server.git"
+    _git(tmp_path, git_env, "clone", "-q", "--bare", str(src), str(server))
+    local = tmp_path / "sshlocal"
+    _git(tmp_path, git_env, "clone", "-q", str(server), str(local))
+    base_oid = (
+        run_git(server, "rev-parse", "refs/heads/main", env=git_env).decode().strip()
+    )
+
+    shim = tmp_path / "fake-ssh.sh"
+    shim.write_text(
+        "#!/bin/sh\n"
+        "# Fake ssh for hermetic tests: ignore host/-p; run the remote git command\n"
+        "# (the last argument) locally. Put git's exec-path on PATH so the dashed\n"
+        "# git-upload-pack / git-receive-pack helpers resolve.\n"
+        'PATH="$(git --exec-path):$PATH"\n'
+        "export PATH\n"
+        "for last; do :; done\n"
+        'exec sh -c "$last"\n'
+    )
+    shim.chmod(shim.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    return SimpleNamespace(
+        repo_url=f"ssh://localhost{server}",
+        scp_url=f"localhost:{server}",
+        ssh_command=str(shim),
+        server_path=server,
+        local_path=local,
+        base_oid=base_oid,
+        env=git_env,
+    )

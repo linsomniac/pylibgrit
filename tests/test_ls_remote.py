@@ -47,5 +47,6 @@ def test_ls_remote_tags_filter(git_daemon) -> None:
 
 
 def test_ls_remote_unsupported_scheme_raises() -> None:
+    # ftp:// is genuinely unsupported (ssh:// is now a supported transport).
     with pytest.raises(pylibgrit.NetworkError):
-        pylibgrit.ls_remote("ssh://example.com/repo.git")
+        pylibgrit.ls_remote("ftp://example.com/repo.git")
