@@ -112,9 +112,8 @@ pub(crate) fn http_advertisement(
     password: Option<String>,
     use_credential_helpers: bool,
 ) -> PyResult<Advertisement> {
-    let (clean_url, userinfo) = crate::net_transport::split_userinfo(url);
-    let user = username.or_else(|| userinfo.as_ref().map(|(u, _)| u.clone()));
-    let pass = password.or_else(|| userinfo.as_ref().and_then(|(_, p)| p.clone()));
+    let (clean_url, user, pass) =
+        crate::net_transport::resolve_url_credentials(url, username, password);
     let client = build_http_client(py, None, user, pass, use_credential_helpers)?;
     py.allow_threads(|| -> Result<Advertisement, grit_lib::error::Error> {
         let transport = grit_lib::transport::http::SmartHttpTransport::new(client);

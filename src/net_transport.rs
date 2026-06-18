@@ -65,6 +65,22 @@ pub(crate) fn split_userinfo(url: &str) -> (String, Option<(String, Option<Strin
     (format!("{scheme}://{host}{tail}"), Some(creds))
 }
 
+// AIDEV-NOTE: Resolve the effective HTTP(S) credentials for a request. Splits any `user[:pass]@`
+// userinfo off `url` (ureq ignores URL userinfo) and merges it with the explicit kwargs: explicit
+// `username`/`password` win, else fall back to the URL userinfo. Returns the userinfo-stripped URL
+// plus the resolved (user, pass). Every http(s) entry point (ls_remote, fetch/clone, push) goes
+// through here so the precedence rule lives in exactly one place.
+pub(crate) fn resolve_url_credentials(
+    url: &str,
+    username: Option<String>,
+    password: Option<String>,
+) -> (String, Option<String>, Option<String>) {
+    let (clean_url, userinfo) = split_userinfo(url);
+    let user = username.or_else(|| userinfo.as_ref().map(|(u, _)| u.clone()));
+    let pass = password.or_else(|| userinfo.as_ref().and_then(|(_, p)| p.clone()));
+    (clean_url, user, pass)
+}
+
 // AIDEV-NOTE: Connect a git:// service for PUSH (git-receive-pack). Forces protocol v0/v1
 // (`protocol_version: 0`) because grit's push rejects v2. Like `git_connect`, the returned
 // `Box<dyn Connection>` is `!Send` — construct + consume it inside one `allow_threads` closure.

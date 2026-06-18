@@ -332,6 +332,15 @@ pub(crate) fn push_method(
     progress: Option<Py<PyAny>>,
 ) -> PyResult<PushReport> {
     let specs = build_push_specs(py, repo, refspecs, force)?;
+    // AIDEV-NOTE: An empty refspec list is a guaranteed no-op. Short-circuit BEFORE opening a network
+    // connection (the server is never contacted) and return an empty, successful report (no updates →
+    // vacuously ok). This also means an empty list never validates the URL scheme.
+    if specs.is_empty() {
+        return Ok(PushReport {
+            results: Vec::new(),
+            ok: true,
+        });
+    }
     let opts = PushOptions {
         atomic,
         dry_run,
@@ -352,9 +361,8 @@ pub(crate) fn push_method(
             result.map_err(net_map_err)?
         }
         Scheme::Http => {
-            let (clean_url, userinfo) = crate::net_transport::split_userinfo(&url);
-            let user = username.or_else(|| userinfo.as_ref().map(|(u, _)| u.clone()));
-            let pass = password.or_else(|| userinfo.as_ref().and_then(|(_, p)| p.clone()));
+            let (clean_url, user, pass) =
+                crate::net_transport::resolve_url_credentials(&url, username, password);
             let client = crate::net_credentials::build_http_client(
                 py,
                 Some(&git_dir),

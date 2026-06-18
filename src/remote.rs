@@ -223,12 +223,13 @@ pub(crate) fn fetch_raw(
             })
             .map_err(net_map_err)?,
         Scheme::Http => {
-            let (clean_url, userinfo) = crate::net_transport::split_userinfo(url);
+            let (clean_url, user, pass) =
+                crate::net_transport::resolve_url_credentials(url, username, password);
             let client = crate::net_credentials::build_http_client(
                 py,
                 Some(git_dir),
-                merge_user(username, &userinfo),
-                merge_pass(password, &userinfo),
+                user,
+                pass,
                 use_credential_helpers,
             )?;
             py.allow_threads(|| {
@@ -239,20 +240,6 @@ pub(crate) fn fetch_raw(
         }
     };
     Ok(outcome)
-}
-
-// AIDEV-NOTE: Credentials precedence: explicit kwargs win, else fall back to URL userinfo.
-fn merge_user(
-    explicit: Option<String>,
-    userinfo: &Option<(String, Option<String>)>,
-) -> Option<String> {
-    explicit.or_else(|| userinfo.as_ref().map(|(u, _)| u.clone()))
-}
-fn merge_pass(
-    explicit: Option<String>,
-    userinfo: &Option<(String, Option<String>)>,
-) -> Option<String> {
-    explicit.or_else(|| userinfo.as_ref().and_then(|(_, p)| p.clone()))
 }
 
 // AIDEV-NOTE: Build FetchOptions from the Python kwargs (default refspec fetches all heads into

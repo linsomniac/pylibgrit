@@ -70,3 +70,22 @@ def test_push_progress_callback_exception_propagates(git_daemon_push) -> None:
     repo = pylibgrit.Repository.open(p.local_path / ".git", p.local_path)
     with pytest.raises(Boom):
         repo.push(p.repo_url, ["main"], progress=cb)
+
+
+def test_push_progress_callback_exception_propagates_http(http_push_server) -> None:
+    # AIDEV-NOTE: The git:// arm is covered above; this asserts the IDENTICAL take_error() path over
+    # https (push_http). The post-receive hook guarantees side-band-2 output so the callback fires;
+    # when it raises, push_method re-raises the captured exception after the transfer.
+    p, env = http_push_server, http_push_server.env
+    _install_hook(p.server_path)
+    _advance(p.local_path, env)
+
+    class Boom(Exception):
+        pass
+
+    def cb(_data: bytes) -> None:
+        raise Boom("stop")
+
+    repo = pylibgrit.Repository.open(p.local_path / ".git", p.local_path)
+    with pytest.raises(Boom):
+        repo.push(p.repo_url, ["main"], progress=cb)
