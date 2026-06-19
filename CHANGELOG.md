@@ -4,6 +4,21 @@ All notable changes to pylibgrit are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-06-18
+
+### Added
+
+- **SSH transport** — `ls_remote`, `clone`, `fetch`, and `push` now support `ssh://`,
+  `git+ssh://`, and scp-style `user@host:path` URLs. pylibgrit spawns the system `ssh`
+  (no embedded SSH library); authentication (keys, ssh-agent, `known_hosts`) is handled
+  entirely by `ssh`.
+  - New `ssh_command=` keyword on all four entry points: a shell command line run via
+    `sh -c`, like Git's `GIT_SSH_COMMAND`
+    (e.g. `"ssh -i ~/.ssh/id_ed25519"`). When omitted, follows Git's precedence
+    (`$GIT_SSH_COMMAND` → `$GIT_SSH` → `ssh`).
+  - The http-only `username=` / `password=` kwargs raise `ValueError` when used with an
+    ssh URL (ssh auth is out of band).
+
 ## [0.4.0] - 2026-06-17
 
 ### Added
@@ -126,6 +141,7 @@ All notable changes to pylibgrit are documented here. The format is based on
   config — a thin Python façade over grit-lib 0.4.1, shipped as an `abi3` (CPython 3.11+)
   wheel with no external `git` binary or system C libraries required.
 
+[0.5.0]: https://github.com/linsomniac/pylibgrit/releases/tag/v0.5.0
 [0.4.0]: https://github.com/linsomniac/pylibgrit/releases/tag/v0.4.0
 [0.3.0]: https://github.com/linsomniac/pylibgrit/releases/tag/v0.3.0
 [0.2.0]: https://github.com/linsomniac/pylibgrit/releases/tag/v0.2.0

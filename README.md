@@ -250,12 +250,28 @@ Credentials are resolved in this order of precedence:
 | `git://` fetch/clone/ls-remote | Supported |
 | `https://` push | Supported (since 0.4.0) |
 | `git://` push | Supported (since 0.4.0) |
-| `ssh://` / `git@` | Not yet supported |
+| `ssh://` / `git+ssh://` / scp-style `user@host:path` | Supported (since 0.5.0; spawns system `ssh`) |
 | Signed push (`--signed`) | Not yet supported |
 | Submodule push | Not yet supported |
 | Push protocol v2 | Not yet supported (grit rejects v2 push; falls back to v1) |
 | Shallow / `--depth` | Not yet supported |
 | Bare / mirror clone | Not yet supported |
+
+### SSH transport
+
+Since **0.5.0**, `ls_remote`, `clone`, `fetch`, and `push` support **`ssh://`**,
+**`git+ssh://`**, and scp-style **`user@host:path`** URLs. pylibgrit spawns the system
+`ssh` (no embedded SSH library). Authentication (keys, ssh-agent, `known_hosts`,
+`~/.ssh/config`) is entirely `ssh`'s job; put the user in the URL
+(`ssh://user@host/...`).
+
+The `username=` / `password=` kwargs do **not** apply to ssh URLs and raise `ValueError`.
+
+The ssh program is configurable per call with `ssh_command=` — a shell command line run
+via `sh -c`, exactly like Git's `GIT_SSH_COMMAND`
+(e.g. `ssh_command="ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no"`). When omitted,
+pylibgrit follows Git's default precedence: `$GIT_SSH_COMMAND`, then `$GIT_SSH`, then
+`ssh`. `ls_remote`, `clone`, `fetch`, and `push` all accept `ssh_command=`.
 
 ### Example
 
