@@ -127,6 +127,14 @@ jobs:
           # ci.yml uses `auto` for glibc (newer glibc, fine for dev — intentional
           # divergence). Ignored on macOS (manylinux is Linux-only).
           manylinux: ${{ matrix.manylinux }}
+          # AIDEV-NOTE: ring 0.17 (via grit-lib http-ureq -> rustls -> ring) ships pregenerated
+          # ARMv8 asm whose asm_base.h aborts with `#error "ARM assembler must define __ARM_ARCH"`
+          # under the manylinux glibc aarch64 cross-gcc, which doesn't predefine that macro for .S
+          # files. Force-define it for the glibc-aarch64 target only (the CFLAGS var is
+          # target-specific, so x86_64 / musl / macOS legs are untouched). Runs in the build
+          # container so the export reaches cargo's cc invocation.
+          before-script-linux: |
+            export CFLAGS_aarch64_unknown_linux_gnu="-D__ARM_ARCH=8"
       - name: Verify exactly one cp311-abi3 wheel
         shell: bash
         run: |
