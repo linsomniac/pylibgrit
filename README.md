@@ -269,7 +269,7 @@ The `username=` / `password=` kwargs do **not** apply to ssh URLs and raise `Val
 
 The ssh program is configurable per call with `ssh_command=` — a shell command line run
 via `sh -c`, exactly like Git's `GIT_SSH_COMMAND`
-(e.g. `ssh_command="ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no"`). When omitted,
+(e.g. `ssh_command="ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes"`). When omitted,
 pylibgrit follows Git's default precedence: `$GIT_SSH_COMMAND`, then `$GIT_SSH`, then
 `ssh`. `ls_remote`, `clone`, `fetch`, and `push` all accept `ssh_command=`.
 

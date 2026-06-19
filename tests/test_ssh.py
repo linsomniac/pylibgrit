@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+
 import pytest
 
 import pylibgrit
@@ -152,3 +154,23 @@ def test_ls_remote_ssh_git_plus_ssh(ssh_server) -> None:
         ssh_server.git_plus_ssh_url, ssh_command=ssh_server.ssh_command
     )
     assert any(r.name == b"refs/heads/main" for r in refs)
+
+
+@pytest.mark.parametrize("scheme", ["ssh", "scp"])
+def test_ssh_url_path_shell_metacharacters_not_executed(
+    ssh_server, tmp_path, scheme: str
+) -> None:
+    # Security regression: shell metacharacters in the URL-derived remote path must reach
+    # the remote git command as a single literal argument (grit single-quotes it), never
+    # interpreted by a shell. If the path were left unquoted, the `; touch` below would run
+    # as a second command on the (fake-ssh) remote and create the sentinel file.
+    sentinel = tmp_path / "INJECTED"
+    payload = f"{ssh_server.server_path}; touch {sentinel}"
+    url = f"ssh://localhost{payload}" if scheme == "ssh" else f"localhost:{payload}"
+    # The metacharacter-laden path is not a real repository, so the upload-pack legitimately
+    # fails; the only thing under test is that no injected command ran.
+    with contextlib.suppress(Exception):
+        pylibgrit.ls_remote(url, ssh_command=ssh_server.ssh_command)
+    assert not sentinel.exists(), (
+        "shell metacharacters in the ssh URL path were executed"
+    )
