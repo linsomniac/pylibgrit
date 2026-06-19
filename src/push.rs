@@ -10,7 +10,9 @@ use grit_lib::push_report::PushRefStatus;
 use grit_lib::transfer::{PushOptions, PushOutcome, PushRefSpec};
 
 use crate::error::net_map_err;
-use crate::net_transport::{classify, git_connect_receive, Scheme};
+use crate::net_transport::{
+    classify, git_connect_receive, reject_creds_for_ssh, ssh_connect_receive, Scheme,
+};
 
 // AIDEV-NOTE: A push ref update (constructable input). `dst` is bytes (house style: ref names are
 // bytes); grit's PushRefSpec.dst is a String, so `dst` is converted to UTF-8 when building the spec
@@ -330,7 +332,9 @@ pub(crate) fn push_method(
     password: Option<String>,
     use_credential_helpers: bool,
     progress: Option<Py<PyAny>>,
+    ssh_command: Option<String>,
 ) -> PyResult<PushReport> {
+    reject_creds_for_ssh(&url, &username, &password)?;
     let specs = build_push_specs(py, repo, refspecs, force)?;
     // AIDEV-NOTE: An empty refspec list is a guaranteed no-op. Short-circuit BEFORE opening a network
     // connection (the server is never contacted) and return an empty, successful report (no updates →
@@ -379,11 +383,14 @@ pub(crate) fn push_method(
             result.map_err(net_map_err)?
         }
         Scheme::Ssh => {
-            // AIDEV-TODO: When ssh push lands (Task 3), call reject_creds_for_ssh first in
-            // push_method so username/password are rejected for ssh URLs.
-            return Err(net_map_err(grit_lib::error::Error::Message(
-                "ssh push is not yet implemented in this build".to_owned(),
-            )));
+            let result = py.allow_threads(|| -> Result<PushOutcome, grit_lib::error::Error> {
+                let mut conn = ssh_connect_receive(&url, ssh_command.as_deref())?;
+                grit_lib::push::push_remote(&git_dir, &mut *conn, &specs, &opts, &mut prog)
+            });
+            if let Some(e) = prog.take_error() {
+                return Err(e);
+            }
+            result.map_err(net_map_err)?
         }
     };
     build_push_report(py, outcome)

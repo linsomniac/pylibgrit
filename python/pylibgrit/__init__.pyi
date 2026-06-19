@@ -548,6 +548,7 @@ class Repository:
         password: str | None = None,
         use_credential_helpers: bool = True,
         progress: Callable[[bytes], None] | None = None,
+        ssh_command: str | None = None,
     ) -> PushReport: ...
 
 # --- Networking (read path) -----------------------------------------------

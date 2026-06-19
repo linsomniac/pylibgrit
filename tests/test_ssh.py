@@ -106,3 +106,42 @@ def test_fetch_over_ssh_rejects_credentials(ssh_server) -> None:
             username="bob",
             ssh_command=ssh_server.ssh_command,
         )
+
+
+def test_push_over_ssh(ssh_server) -> None:
+    from tests.gitlib import run_git
+
+    _commit(ssh_server.local_path, ssh_server.env, "c.txt", "three\n")
+    new = (
+        run_git(ssh_server.local_path, "rev-parse", "HEAD", env=ssh_server.env)
+        .decode()
+        .strip()
+    )
+    repo = pylibgrit.Repository.open(
+        ssh_server.local_path / ".git", ssh_server.local_path
+    )
+    report = repo.push(
+        ssh_server.repo_url, ["main"], ssh_command=ssh_server.ssh_command
+    )
+    assert report.ok
+    server_tip = (
+        run_git(
+            ssh_server.server_path, "rev-parse", "refs/heads/main", env=ssh_server.env
+        )
+        .decode()
+        .strip()
+    )
+    assert server_tip == new
+
+
+def test_push_over_ssh_rejects_credentials(ssh_server) -> None:
+    repo = pylibgrit.Repository.open(
+        ssh_server.local_path / ".git", ssh_server.local_path
+    )
+    with pytest.raises(ValueError):
+        repo.push(
+            ssh_server.repo_url,
+            ["main"],
+            username="bob",
+            ssh_command=ssh_server.ssh_command,
+        )

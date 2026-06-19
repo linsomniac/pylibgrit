@@ -126,6 +126,20 @@ pub(crate) fn ssh_connect(
     build_ssh_transport(ssh_command).connect(url, Service::UploadPack, &opts)
 }
 
+// AIDEV-NOTE: Connect an ssh service (git-receive-pack) for push. Forces protocol v0 (grit's push
+// rejects v2), like `git_connect_receive`. The returned `Box<dyn Connection>` wraps a child process
+// (`!Send`) — construct + consume it inside one `allow_threads` closure.
+pub(crate) fn ssh_connect_receive(
+    url: &str,
+    ssh_command: Option<&str>,
+) -> Result<Box<dyn Connection>, grit_lib::error::Error> {
+    let opts = ConnectOptions {
+        protocol_version: 0,
+        server_options: Vec::new(),
+    };
+    build_ssh_transport(ssh_command).connect(url, Service::ReceivePack, &opts)
+}
+
 // AIDEV-NOTE: ssh auth (keys/agent/known_hosts) is the ssh subprocess's job, never pylibgrit's. The
 // http-only `username`/`password` kwargs do not apply to ssh URLs; passing either with an ssh URL is
 // almost certainly a mistake, so fail loud. `use_credential_helpers` (http-only) is left alone.

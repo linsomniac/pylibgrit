@@ -1041,7 +1041,7 @@ impl Repository {
     // failures raise. progress= receives the remote's side-band-2 (hook/diagnostic) output.
     #[pyo3(signature = (url, refspecs, *, force=false, atomic=false, dry_run=false,
                         push_options=None, username=None, password=None,
-                        use_credential_helpers=true, progress=None))]
+                        use_credential_helpers=true, progress=None, ssh_command=None))]
     #[allow(clippy::too_many_arguments)]
     fn push(
         &self,
@@ -1056,6 +1056,7 @@ impl Repository {
         password: Option<String>,
         use_credential_helpers: bool,
         progress: Option<Py<PyAny>>,
+        ssh_command: Option<String>,
     ) -> PyResult<crate::push::PushReport> {
         crate::push::push_method(
             py,
@@ -1070,6 +1071,7 @@ impl Repository {
             password,
             use_credential_helpers,
             progress,
+            ssh_command,
         )
     }
 
